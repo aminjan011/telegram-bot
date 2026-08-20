@@ -39,7 +39,7 @@ class AdminStates(StatesGroup):
     waiting_for_ch1 = State()
     waiting_for_ch2 = State()
 
-# --- DATABASE CONNECTION POOL (TEZKOR ULANISH) ---
+# --- DATABASE CONNECTION POOL ---
 db_pool = None
 if DATABASE_URL:
     try:
@@ -423,6 +423,16 @@ async def free_channel_handler(callback: CallbackQuery):
     
     user = get_user(user_id)
     points = user[2] if user else 0
+    expire_str = user[4] if user else None
+
+    # Foydalanuvchi hozirda yopiq kanalda bor-yo'qligini tekshirish
+    is_in_private_channel = False
+    try:
+        member = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
+        if member.status in ["creator", "administrator", "member"]:
+            is_in_private_channel = True
+    except Exception:
+        is_in_private_channel = False
 
     text = (
         f"⚡ <b>Бесплатный канал (Реферальная система)</b>\n\n"
@@ -432,6 +442,19 @@ async def free_channel_handler(callback: CallbackQuery):
         f"🔗 Ваша пригласительная ссылка:\n<code>{ref_link}</code>\n\n"
     )
 
+    kb_back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]])
+
+    # 1-HOLAT: Foydalanuvchi allaqachon kanalda bor va vaqti tugamagan
+    if is_in_private_channel and expire_str:
+        text += (
+            f"✅ <b>Вы уже состоите в закрытом канале!</b>\n\n"
+            f"⏳ Срок действия вашего текущего доступа: до <b>{expire_str}</b>.\n"
+            f"По истечении этого времени вы сможете активировать доступ снова."
+        )
+        await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
+        return
+
+    # 2-HOLAT: 10 ball yig'ilgan va kanalda yo'q -> Yangi havola beriladi
     if points >= REQUIRED_REFERRALS:
         expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
         expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -452,11 +475,6 @@ async def free_channel_handler(callback: CallbackQuery):
                 member_limit=1,
                 expire_date=expire_time
             )
-            
-            try:
-                await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
-            except Exception:
-                pass
 
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -473,17 +491,11 @@ async def free_channel_handler(callback: CallbackQuery):
             )
         except Exception as e:
             logging.error(f"Ошибка создания ссылки: {e}")
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]]
-            )
             text += "⚠️ Произошла ошибка при создании ссылки. Убедитесь, что бот является администратором закрытого канала с правом приглашения пользователей."
+            kb = kb_back
     else:
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]
-            ]
-        )
         text += f"💡 Для получения доступа вам осталось набрать ещё <b>{REQUIRED_REFERRALS - points}</b> баллов."
+        kb = kb_back
 
     await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
