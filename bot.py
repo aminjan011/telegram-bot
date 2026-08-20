@@ -15,7 +15,7 @@ from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
-# ==================== НАСТРОЙКИ ====================
+# ==================== SOZLAMA (SETTINGS) ====================
 BOT_TOKEN = "8932013152:AAHm6khUTUG4DexDCxrRXoxLyFP7sxAAZJ8"
 PRIVATE_CHANNEL_ID = -1004324882879
 CHANNELS_SECTION_LINK = "https://t.me/+_AxorsmPVYE2M2Ji"
@@ -27,7 +27,7 @@ ADMIN_ID = 1112793157
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 PORT = int(os.getenv("PORT", 8080))
-# ===================================================
+# ============================================================
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -461,32 +461,38 @@ async def auto_kick_expired_users():
         try:
             conn = sqlite3.connect("bot_database.db")
             cursor = conn.cursor()
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("SELECT user_id FROM users WHERE expire_date IS NOT NULL AND expire_date <= ?", (now_str,))
-            expired_users = cursor.fetchall()
+            now = datetime.now()
+            
+            cursor.execute("SELECT user_id, expire_date FROM users WHERE expire_date IS NOT NULL AND expire_date != ''")
+            users = cursor.fetchall()
 
-            for (u_id,) in expired_users:
+            for u_id, expire_str in users:
                 try:
-                    await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                    await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                    await bot.send_message(
-                        u_id,
-                        f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
-                        f"Вы были автоматически исключены из закрытого канала. "
-                        f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
-                        parse_mode=ParseMode.HTML
-                    )
-                except Exception as e:
-                    logging.error(f"Ошибка при исключении пользователя {u_id}: {e}")
+                    expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
+                    if now >= expire_dt:
+                        try:
+                            await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                            await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                            await bot.send_message(
+                                u_id,
+                                f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
+                                f"Вы были автоматически исключены из закрытого канала. "
+                                f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
+                                parse_mode=ParseMode.HTML
+                            )
+                        except Exception as e:
+                            logging.error(f"Ошибка при исключении пользователя {u_id}: {e}")
 
-                cursor.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = ?", (u_id,))
-                conn.commit()
+                        cursor.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = ?", (u_id,))
+                        conn.commit()
+                except Exception as ex:
+                    logging.error(f"Sana parse qilishda xato: {ex}")
 
             conn.close()
         except Exception as e:
             logging.error(f"Ошибка в auto_kick_expired_users: {e}")
 
-        await asyncio.sleep(3600)
+        await asyncio.sleep(60)
 
 # --- WEBHOOK ISHGA TUSHMASI ---
 async def on_startup(app):
