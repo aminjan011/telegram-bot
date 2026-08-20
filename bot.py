@@ -1,6 +1,7 @@
 import os
 import logging
 import psycopg2
+from psycopg2 import pool
 import html
 import asyncio
 from datetime import datetime, timedelta
@@ -38,99 +39,131 @@ class AdminStates(StatesGroup):
     waiting_for_ch1 = State()
     waiting_for_ch2 = State()
 
+# --- DATABASE CONNECTION POOL (TEZKOR ULANISH) ---
+db_pool = None
+if DATABASE_URL:
+    try:
+        db_pool = psycopg2.pool.SimpleConnectionPool(1, 20, DATABASE_URL, sslmode='require')
+    except Exception as e:
+        logging.error(f"Pool yaratishda xato: {e}")
+
 def get_db():
+    if db_pool:
+        return db_pool.getconn()
     return psycopg2.connect(DATABASE_URL, sslmode='require')
+
+def release_db(conn):
+    if db_pool and conn:
+        db_pool.putconn(conn)
+    elif conn:
+        conn.close()
 
 def init_db():
     if not DATABASE_URL:
         logging.error("DATABASE_URL topilmadi!")
         return
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            referrer_id BIGINT,
-            points INT DEFAULT 0,
-            has_access INT DEFAULT 0,
-            expire_date TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    ''')
-    cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
-    cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                referrer_id BIGINT,
+                points INT DEFAULT 0,
+                has_access INT DEFAULT 0,
+                expire_date TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
+        cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
+        conn.commit()
+        cursor.close()
+    finally:
+        release_db(conn)
 
 init_db()
 
 def get_setting(key: str) -> str:
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return row[0] if row else ""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        row = cursor.fetchone()
+        cursor.close()
+        return row[0] if row else ""
+    finally:
+        release_db(conn)
 
 def set_setting(key: str, value: str):
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (key, value))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (key, value))
+        conn.commit()
+        cursor.close()
+    finally:
+        release_db(conn)
 
 def get_user(user_id: int):
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referrer_id, points, has_access, expire_date FROM users WHERE user_id = %s", (user_id,))
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return row
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, referrer_id, points, has_access, expire_date FROM users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        cursor.close()
+        return row
+    finally:
+        release_db(conn)
 
 def add_user(user_id: int, referrer_id: int = None):
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO users (user_id, referrer_id) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, referrer_id))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (user_id, referrer_id) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, referrer_id))
+        conn.commit()
+        cursor.close()
+    finally:
+        release_db(conn)
 
 def add_point(user_id: int):
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET points = points + 1 WHERE user_id = %s", (user_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET points = points + 1 WHERE user_id = %s", (user_id,))
+        conn.commit()
+        cursor.close()
+    finally:
+        release_db(conn)
 
 def get_stats():
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*), COALESCE(SUM(points), 0) FROM users")
-    stats = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    total_users = stats[0] if stats[0] else 0
-    total_points = stats[1] if stats[1] else 0
-    return total_users, total_points
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*), COALESCE(SUM(points), 0) FROM users")
+        stats = cursor.fetchone()
+        cursor.close()
+        total_users = stats[0] if stats[0] else 0
+        total_points = stats[1] if stats[1] else 0
+        return total_users, total_points
+    finally:
+        release_db(conn)
 
 def get_all_users():
     conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users")
-    rows = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return [r[0] for r in rows]
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        rows = cursor.fetchall()
+        cursor.close()
+        return [r[0] for r in rows]
+    finally:
+        release_db(conn)
 
 async def check_subscription(user_id: int) -> bool:
     ch1 = get_setting('channel_1')
@@ -347,11 +380,13 @@ async def check_sub_callback(callback: CallbackQuery):
                 pass
             
             conn = get_db()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = %s", (user_id,))
-            conn.commit()
-            cursor.close()
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = %s", (user_id,))
+                conn.commit()
+                cursor.close()
+            finally:
+                release_db(conn)
 
         await callback.message.delete()
         first_name = html.escape(callback.from_user.first_name)
@@ -398,16 +433,17 @@ async def free_channel_handler(callback: CallbackQuery):
     )
 
     if points >= REQUIRED_REFERRALS:
-        # Har safar 10 ball to'liq yig'ilganda yangi +10 kunlik muddat belgilanadi
         expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
         expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
         
         conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET expire_date = %s WHERE user_id = %s", (expire_date_str, user_id))
-        conn.commit()
-        cursor.close()
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET expire_date = %s WHERE user_id = %s", (expire_date_str, user_id))
+            conn.commit()
+            cursor.close()
+        finally:
+            release_db(conn)
 
         try:
             expire_time = datetime.now() + timedelta(minutes=10)
@@ -472,36 +508,38 @@ async def auto_kick_expired_users():
     while True:
         try:
             conn = get_db()
-            cursor = conn.cursor()
-            now = datetime.now()
-            
-            cursor.execute("SELECT user_id, expire_date FROM users WHERE expire_date IS NOT NULL AND expire_date != ''")
-            users = cursor.fetchall()
+            try:
+                cursor = conn.cursor()
+                now = datetime.now()
+                
+                cursor.execute("SELECT user_id, expire_date FROM users WHERE expire_date IS NOT NULL AND expire_date != ''")
+                users = cursor.fetchall()
 
-            for u_id, expire_str in users:
-                try:
-                    expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
-                    if now >= expire_dt:
-                        try:
-                            await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                            await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                            await bot.send_message(
-                                u_id,
-                                f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
-                                f"Вы были автоматически исключены из закрытого канала. "
-                                f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
-                                parse_mode=ParseMode.HTML
-                            )
-                        except Exception as e:
-                            logging.error(f"Ошибка при исключении пользователя {u_id}: {e}")
+                for u_id, expire_str in users:
+                    try:
+                        expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
+                        if now >= expire_dt:
+                            try:
+                                await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                await bot.send_message(
+                                    u_id,
+                                    f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
+                                    f"Вы были автоматически исключены из закрытого канала. "
+                                    f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
+                                    parse_mode=ParseMode.HTML
+                                )
+                            except Exception as e:
+                                logging.error(f"Ошибка при исключении пользователя {u_id}: {e}")
 
-                        cursor.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = %s", (u_id,))
-                        conn.commit()
-                except Exception as ex:
-                    logging.error(f"Sana parse qilishda xato: {ex}")
+                            cursor.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = %s", (u_id,))
+                            conn.commit()
+                    except Exception as ex:
+                        logging.error(f"Sana parse qilishda xato: {ex}")
 
-            cursor.close()
-            conn.close()
+                cursor.close()
+            finally:
+                release_db(conn)
         except Exception as e:
             logging.error(f"Ошибка в auto_kick_expired_users: {e}")
 
