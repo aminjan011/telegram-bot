@@ -388,7 +388,6 @@ async def free_channel_handler(callback: CallbackQuery):
     
     user = get_user(user_id)
     points = user[2] if user else 0
-    expire_date_str = user[4] if user and len(user) > 4 else None
 
     text = (
         f"⚡ <b>Бесплатный канал (Реферальная система)</b>\n\n"
@@ -399,15 +398,16 @@ async def free_channel_handler(callback: CallbackQuery):
     )
 
     if points >= REQUIRED_REFERRALS:
-        if not expire_date_str:
-            expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
-            expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
-            conn = get_db()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET expire_date = %s WHERE user_id = %s", (expire_date_str, user_id))
-            conn.commit()
-            cursor.close()
-            conn.close()
+        # Har safar 10 ball to'liq yig'ilganda yangi +10 kunlik muddat belgilanadi
+        expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
+        expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET expire_date = %s WHERE user_id = %s", (expire_date_str, user_id))
+        conn.commit()
+        cursor.close()
+        conn.close()
 
         try:
             expire_time = datetime.now() + timedelta(minutes=10)
