@@ -1,6 +1,6 @@
 import os
 import logging
-import sqlite3
+import psycopg2
 import html
 import asyncio
 from datetime import datetime, timedelta
@@ -26,6 +26,7 @@ ADMIN_ID = 1112793157
 
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 PORT = int(os.getenv("PORT", 8080))
 # ============================================================
 
@@ -37,88 +38,97 @@ class AdminStates(StatesGroup):
     waiting_for_ch1 = State()
     waiting_for_ch2 = State()
 
+def get_db():
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
+
 def init_db():
-    conn = sqlite3.connect("bot_database.db")
+    if not DATABASE_URL:
+        logging.error("DATABASE_URL topilmadi!")
+        return
+    conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            referrer_id INTEGER,
-            points INTEGER DEFAULT 0,
-            has_access INTEGER DEFAULT 0,
+            user_id BIGINT PRIMARY KEY,
+            referrer_id BIGINT,
+            points INT DEFAULT 0,
+            has_access INT DEFAULT 0,
             expire_date TEXT
         )
     ''')
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN expire_date TEXT")
-    except sqlite3.OperationalError:
-        pass
-
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
         )
     ''')
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz')")
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('channel_2', '')")
+    cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
+    cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
     conn.commit()
+    cursor.close()
     conn.close()
 
 init_db()
 
 def get_setting(key: str) -> str:
-    conn = sqlite3.connect("bot_database.db")
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     return row[0] if row else ""
 
 def set_setting(key: str, value: str):
-    conn = sqlite3.connect("bot_database.db")
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (key, value))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def get_user(user_id: int):
-    conn = sqlite3.connect("bot_database.db")
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referrer_id, points, has_access, expire_date FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT user_id, referrer_id, points, has_access, expire_date FROM users WHERE user_id = %s", (user_id,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     return row
 
 def add_user(user_id: int, referrer_id: int = None):
-    conn = sqlite3.connect("bot_database.db")
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, referrer_id) VALUES (?, ?)", (user_id, referrer_id))
+    cursor.execute("INSERT INTO users (user_id, referrer_id) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, referrer_id))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def add_point(user_id: int):
-    conn = sqlite3.connect("bot_database.db")
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET points = points + 1 WHERE user_id = ?", (user_id,))
+    cursor.execute("UPDATE users SET points = points + 1 WHERE user_id = %s", (user_id,))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def get_stats():
-    conn = sqlite3.connect("bot_database.db")
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*), SUM(points) FROM users")
+    cursor.execute("SELECT COUNT(*), COALESCE(SUM(points), 0) FROM users")
     stats = cursor.fetchone()
+    cursor.close()
     conn.close()
     total_users = stats[0] if stats[0] else 0
     total_points = stats[1] if stats[1] else 0
     return total_users, total_points
 
 def get_all_users():
-    conn = sqlite3.connect("bot_database.db")
+    conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users")
     rows = cursor.fetchall()
+    cursor.close()
     conn.close()
     return [r[0] for r in rows]
 
@@ -336,10 +346,11 @@ async def check_sub_callback(callback: CallbackQuery):
             except Exception:
                 pass
             
-            conn = sqlite3.connect("bot_database.db")
+            conn = get_db()
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = ?", (user_id,))
+            cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = %s", (user_id,))
             conn.commit()
+            cursor.close()
             conn.close()
 
         await callback.message.delete()
@@ -391,10 +402,11 @@ async def free_channel_handler(callback: CallbackQuery):
         if not expire_date_str:
             expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
             expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
-            conn = sqlite3.connect("bot_database.db")
+            conn = get_db()
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET expire_date = ? WHERE user_id = ?", (expire_date_str, user_id))
+            cursor.execute("UPDATE users SET expire_date = %s WHERE user_id = %s", (expire_date_str, user_id))
             conn.commit()
+            cursor.close()
             conn.close()
 
         try:
@@ -459,7 +471,7 @@ async def back_main_handler(callback: CallbackQuery):
 async def auto_kick_expired_users():
     while True:
         try:
-            conn = sqlite3.connect("bot_database.db")
+            conn = get_db()
             cursor = conn.cursor()
             now = datetime.now()
             
@@ -483,11 +495,12 @@ async def auto_kick_expired_users():
                         except Exception as e:
                             logging.error(f"Ошибка при исключении пользователя {u_id}: {e}")
 
-                        cursor.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = ?", (u_id,))
+                        cursor.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = %s", (u_id,))
                         conn.commit()
                 except Exception as ex:
                     logging.error(f"Sana parse qilishda xato: {ex}")
 
+            cursor.close()
             conn.close()
         except Exception as e:
             logging.error(f"Ошибка в auto_kick_expired_users: {e}")
