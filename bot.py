@@ -444,17 +444,22 @@ async def free_channel_handler(callback: CallbackQuery):
 
     kb_back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]])
 
-    # 1-HOLAT: Foydalanuvchi allaqachon kanalda bor va vaqti tugamagan
+    # 1-HOLAT: Foydalanuvchi allaqachon kanalda bor va muddati tugamagan
     if is_in_private_channel and expire_str:
-        text += (
-            f"✅ <b>Вы уже состоите в закрытом канале!</b>\n\n"
-            f"⏳ Срок действия вашего текущего доступа: до <b>{expire_str}</b>.\n"
-            f"По истечении этого времени вы сможете активировать доступ снова."
-        )
-        await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
-        return
+        try:
+            exp_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
+            if datetime.now() < exp_dt:
+                text += (
+                    f"✅ <b>Вы уже состоите в закрытом канале!</b>\n\n"
+                    f"⏳ Срок действия вашего текущего доступа: до <b>{expire_str}</b>.\n"
+                    f"По истечении этого времени вы сможете активировать доступ снова."
+                )
+                await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
+                return
+        except Exception:
+            pass
 
-    # 2-HOLAT: 10 ball yig'ilgan va kanalda yo'q -> Yangi havola beriladi
+    # 2-HOLAT: 10 ball yig'ilgan va kanalda yo'q (yoki muddati tugagan)
     if points >= REQUIRED_REFERRALS:
         expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
         expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -515,7 +520,7 @@ async def back_main_handler(callback: CallbackQuery):
     welcome_text = f"💥 <b>Добро пожаловать, {first_name}!</b>\n‹━━━━━━━━━━━━━━━━›\n\n🔥 Приватный архив 18+\n— эксклюзивный контент\n— доступ только для участников\n\n👇 <b>Выбери раздел</b> 👇"
     await callback.message.edit_text(welcome_text, reply_markup=get_main_keyboard(), parse_mode=ParseMode.HTML)
 
-# --- AVTOMATIK KANALO'DAN CHIQARISH (10 KUNDAN SO'NG) ---
+# --- AVTOMATIK KANALO'DAN CHIQARISH (XAVFSIZ TEKSHIRUV) ---
 async def auto_kick_expired_users():
     while True:
         try:
@@ -531,19 +536,24 @@ async def auto_kick_expired_users():
                     try:
                         expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
                         if now >= expire_dt:
+                            # Telegram'da haqiqatan ham kanalda bormi, tekshiramiz
                             try:
-                                await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                                await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                                await bot.send_message(
-                                    u_id,
-                                    f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
-                                    f"Вы были автоматически исключены из закрытого канала. "
-                                    f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
-                                    parse_mode=ParseMode.HTML
-                                )
+                                member = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                if member.status in ["member", "restricted"]:
+                                    await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                    await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                    await bot.send_message(
+                                        u_id,
+                                        f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
+                                        f"Вы были автоматически исключены из закрытого канала. "
+                                        f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
+                                        parse_mode=ParseMode.HTML
+                                    )
+                                    logging.info(f"Foydalanuvchi {u_id} kanaldan chiqarildi (muddati tugagan).")
                             except Exception as e:
-                                logging.error(f"Ошибка при исключении пользователя {u_id}: {e}")
+                                logging.error(f"Kanal a'zosini kick qilishda xato ({u_id}): {e}")
 
+                            # Muddati tugagach, bazani tozalaymiz
                             cursor.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = %s", (u_id,))
                             conn.commit()
                     except Exception as ex:
