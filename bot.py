@@ -71,7 +71,8 @@ def init_db():
                 referrer_id BIGINT,
                 points INT DEFAULT 0,
                 has_access INT DEFAULT 0,
-                expire_date TEXT
+                expire_date TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         cursor.execute('''
@@ -141,16 +142,42 @@ def add_point(user_id: int):
     finally:
         release_db(conn)
 
+# ==================== TAKOMILLASHTIRILGAN STATISTIKA ====================
 def get_stats():
     conn = get_db()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*), COALESCE(SUM(points), 0) FROM users")
-        stats = cursor.fetchone()
+        
+        # 1. Umumiy va ballari bor foydalanuvchilar
+        cursor.execute("SELECT COUNT(*), COALESCE(SUM(points), 0), COALESCE(AVG(points), 0) FROM users")
+        total_users, total_points, avg_points = cursor.fetchone()
+        
+        # 2. Kamida 1 ta ball to'plagan faol taklifchilar
+        cursor.execute("SELECT COUNT(*) FROM users WHERE points > 0")
+        active_referrers = cursor.fetchone()[0]
+        
+        # 3. Bugun va oxirgi 7 kunda qo'shilganlar
+        cursor.execute("SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE")
+        today_users = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'")
+        week_users = cursor.fetchone()[0]
+        
+        # 4. Hozirda faol obunaga (yopiq kanalga kirishga) ega bo'lganlar
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("SELECT COUNT(*) FROM users WHERE expire_date IS NOT NULL AND expire_date > %s", (now_str,))
+        active_subscribers = cursor.fetchone()[0]
+
         cursor.close()
-        total_users = stats[0] if stats[0] else 0
-        total_points = stats[1] if stats[1] else 0
-        return total_users, total_points
+        return {
+            "total_users": total_users or 0,
+            "total_points": total_points or 0,
+            "avg_points": round(avg_points or 0, 1),
+            "active_referrers": active_referrers or 0,
+            "today_users": today_users or 0,
+            "week_users": week_users or 0,
+            "active_subscribers": active_subscribers or 0
+        }
     finally:
         release_db(conn)
 
@@ -255,11 +282,16 @@ async def admin_start(message: types.Message):
 async def admin_stats_handler(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
-    total_users, total_points = get_stats()
+    stats = get_stats()
     text = (
-        f"📊 <b>Статистика бота:</b>\n\n"
-        f"👤 Всего пользователей: <b>{total_users}</b>\n"
-        f"⭐ Всего набрано баллов: <b>{total_points}</b>"
+        f"📊 <b>Расширенная статистика бота:</b>\n\n"
+        f"👤 Всего пользователей: <b>{stats['total_users']}</b>\n"
+        f"☀️ Новых за сегодня: <b>+{stats['today_users']}</b>\n"
+        f"📅 Новых за 7 дней: <b>+{stats['week_users']}</b>\n\n"
+        f"⭐ Всего набрано баллов: <b>{stats['total_points']}</b>\n"
+        f"📈 В среднем баллов у юзера: <b>{stats['avg_points']}</b>\n"
+        f"👥 Рефералов привели: <b>{stats['active_referrers']} чел.</b>\n\n"
+        f"🔓 Активных подписок в привате: <b>{stats['active_subscribers']}</b>"
     )
     await callback.message.edit_text(text, reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
