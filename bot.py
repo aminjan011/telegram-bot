@@ -12,6 +12,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
 from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
@@ -141,36 +142,16 @@ def add_point(user_id: int):
     finally:
         release_db(conn)
 
-# ==================== BEKHATO STATISTIKA ====================
 def get_stats():
     conn = get_db()
     try:
         cursor = conn.cursor()
-        
-        # 1. Umumiy foydalanuvchilar va ballar
         cursor.execute("SELECT COUNT(*), COALESCE(SUM(points), 0) FROM users")
-        total_users, total_points = cursor.fetchone()
-        
-        # 2. Kamida 1 balli bor faol taklifchilar
-        cursor.execute("SELECT COUNT(*) FROM users WHERE points > 0")
-        active_referrers = cursor.fetchone()[0]
-        
-        # 3. Yopiq kanalda faol obunasi bo'lganlar
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("SELECT COUNT(*) FROM users WHERE expire_date IS NOT NULL AND expire_date > %s", (now_str,))
-        active_subscribers = cursor.fetchone()[0]
-
+        stats = cursor.fetchone()
         cursor.close()
-        
-        avg_points = round(total_points / total_users, 1) if total_users > 0 else 0
-        
-        return {
-            "total_users": total_users or 0,
-            "total_points": total_points or 0,
-            "avg_points": avg_points,
-            "active_referrers": active_referrers or 0,
-            "active_subscribers": active_subscribers or 0
-        }
+        total_users = stats[0] if stats[0] else 0
+        total_points = stats[1] if stats[1] else 0
+        return total_users, total_points
     finally:
         release_db(conn)
 
@@ -275,20 +256,33 @@ async def admin_start(message: types.Message):
 async def admin_stats_handler(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
-    try:
-        stats = get_stats()
-        text = (
-            f"📊 <b>Расширенная статистика бота:</b>\n\n"
-            f"👤 Всего пользователей: <b>{stats['total_users']}</b>\n"
-            f"👥 Приглашали друзей: <b>{stats['active_referrers']} чел.</b>\n\n"
-            f"⭐ Всего набрано баллов: <b>{stats['total_points']}</b>\n"
-            f"📈 В среднем баллов у юзера: <b>{stats['avg_points']}</b>\n\n"
-            f"🔓 Активных подписок в привате: <b>{stats['active_subscribers']}</b>"
-        )
-        await callback.message.edit_text(text, reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logging.error(f"Statistika xatosi: {e}")
-        await callback.answer("⚠️ Ошибка при получении статистики", show_alert=True)
+        
+    await callback.answer("⏳ Подсчет активных пользователей...", show_alert=False)
+    
+    total_users, total_points = get_stats()
+    users = get_all_users()
+    active_users = 0
+
+    for uid in users:
+        try:
+            await bot.send_chat_action(chat_id=uid, action="typing")
+            active_users += 1
+        except (TelegramForbiddenError, TelegramAPIError):
+            pass
+        except Exception:
+            pass
+        await asyncio.sleep(0.03)
+
+    blocked_users = total_users - active_users
+
+    text = (
+        f"📊 <b>Статистика бота:</b>\n\n"
+        f"👤 Всего пользователей: <b>{total_users}</b>\n"
+        f"🟢 Активных пользователей: <b>{active_users}</b>\n"
+        f"🔴 Заблокировали бота: <b>{blocked_users}</b>\n"
+        f"⭐ Всего набрано баллов: <b>{total_points}</b>"
+    )
+    await callback.message.edit_text(text, reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_set_ch1")
 async def admin_set_ch1(callback: CallbackQuery, state: FSMContext):
