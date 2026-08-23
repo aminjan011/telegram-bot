@@ -261,18 +261,20 @@ async def admin_stats_handler(callback: CallbackQuery):
     
     total_users, total_points = get_stats()
     users = get_all_users()
-    active_users = 0
 
-    for uid in users:
-        try:
-            await bot.send_chat_action(chat_id=uid, action="typing")
-            active_users += 1
-        except (TelegramForbiddenError, TelegramAPIError):
-            pass
-        except Exception:
-            pass
-        await asyncio.sleep(0.03)
+    semaphore = asyncio.Semaphore(30)
 
+    async def check_user(uid):
+        async with semaphore:
+            try:
+                await bot.send_chat_action(chat_id=uid, action="typing")
+                return True
+            except Exception:
+                return False
+
+    results = await asyncio.gather(*[check_user(uid) for uid in users])
+    
+    active_users = sum(1 for r in results if r)
     blocked_users = total_users - active_users
 
     text = (
