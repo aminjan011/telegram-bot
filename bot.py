@@ -39,6 +39,7 @@ class AdminStates(StatesGroup):
     waiting_for_broadcast = State()
     waiting_for_ch1 = State()
     waiting_for_ch2 = State()
+    waiting_for_chat = State()  # Chat linkini kutish holati
 
 # --- DATABASE CONNECTION POOL ---
 db_pool = None
@@ -83,6 +84,7 @@ def init_db():
         ''')
         cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
         cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
+        cursor.execute("INSERT INTO settings (key, value) VALUES ('chat_link', '') ON CONFLICT (key) DO NOTHING")
         conn.commit()
         cursor.close()
     finally:
@@ -183,14 +185,17 @@ async def check_subscription(user_id: int) -> bool:
     return True
 
 def get_main_keyboard():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📁 Каналы", callback_data="channels")],
-            [InlineKeyboardButton(text="⚡ Бесплатный канал", callback_data="free_channel")],
-            [InlineKeyboardButton(text="🤖 Помощник", callback_data="help")],
-            [InlineKeyboardButton(text="📝 Написать администратору", url=f"https://t.me/{ADMIN_USERNAME}")]
-        ]
-    )
+    keyboard = [
+        [InlineKeyboardButton(text="📁 Каналы", callback_data="channels")],
+        [InlineKeyboardButton(text="⚡ Бесплатный канал", callback_data="free_channel")],
+        [InlineKeyboardButton(text="🤖 Помощник", callback_data="help")],
+        [InlineKeyboardButton(text="📝 Написать администратору", url=f"https://t.me/{ADMIN_USERNAME}")]
+    ]
+    chat_url = get_setting('chat_link')
+    if chat_url.strip():
+        keyboard.append([InlineKeyboardButton(text="💬 Чат", url=chat_url)])
+        
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_sub_keyboard():
     ch1 = get_setting('channel_1')
@@ -210,12 +215,14 @@ def get_sub_keyboard():
 def get_admin_keyboard():
     ch1 = get_setting('channel_1') or "Не настроен"
     ch2 = get_setting('channel_2') or "Не настроен"
+    chat = get_setting('chat_link') or "Не настроен"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
             [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
             [InlineKeyboardButton(text=f"⚙️ Канал 1: {ch1}", callback_data="admin_set_ch1")],
             [InlineKeyboardButton(text=f"⚙️ Канал 2: {ch2}", callback_data="admin_set_ch2")],
+            [InlineKeyboardButton(text=f"💬 Чат linki: {chat}", callback_data="admin_set_chat")],
             [InlineKeyboardButton(text="❌ Закрыть", callback_data="admin_close")]
         ]
     )
@@ -336,6 +343,36 @@ async def process_ch2(message: types.Message, state: FSMContext):
     set_setting("channel_2", channel_username)
     await state.clear()
     await message.answer(f"✅ Канал 2 успешно добавлен/обновлен: <b>{channel_username}</b>", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_set_chat")
+async def admin_set_chat(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_for_chat)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Удалить ссылку на чат", callback_data="admin_remove_chat")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]
+        ]
+    )
+    await callback.message.edit_text("✏️ Chat guruhining to'liq havolasini yuboring (masalan: <code>https://t.me/chat_link</code>) yoki o'chirish tugmasini bosing:", reply_markup=kb, parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_remove_chat")
+async def admin_remove_chat(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    set_setting("chat_link", "")
+    await state.clear()
+    await callback.message.edit_text("✅ Chat havolasi muvaffaqiyatli o'chirildi!", reply_markup=get_admin_keyboard())
+
+@dp.message(AdminStates.waiting_for_chat)
+async def process_chat(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    chat_url = message.text.strip()
+    set_setting("chat_link", chat_url)
+    await state.clear()
+    await message.answer(f"✅ Chat linki muvaffaqiyatli saqlandi: <b>{chat_url}</b>", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_cancel_settings")
 async def admin_cancel_settings(callback: CallbackQuery, state: FSMContext):
