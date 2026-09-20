@@ -1,4 +1,4 @@
-aiogram
-aiohttp
-psycopg2-binary
+aiogram>=3.0.0
 asyncpg
+aiohttp
+
