@@ -11,7 +11,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
+from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError, TelegramBadRequest
 from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
@@ -67,9 +67,9 @@ async def init_db_pool():
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('chat_link', '') ON CONFLICT (key) DO NOTHING")
-            logging.info("База данных успешно инициализирована через asyncpg!")
+            logging.info("Ma'lumotlar bazasi asyncpg orqali muvaffaqiyatli ishga tushdi!")
         except Exception as e:
-            logging.error(f"Ошибка подключения к базе данных: {e}")
+            logging.error(f"Baza ulanishida xatolik: {e}")
 
 async def get_setting(key: str) -> str:
     if not db_pool:
@@ -127,7 +127,7 @@ async def check_subscription(user_id: int) -> bool:
     ch1 = await get_setting('channel_1')
     ch2 = await get_setting('channel_2')
     
-    channels_to_check = [c for c in [ch1, ch2] if c.strip()]
+    channels_to_check = [c for c in [ch1, ch2] if c and c.strip()]
     
     for ch in channels_to_check:
         try:
@@ -135,7 +135,7 @@ async def check_subscription(user_id: int) -> bool:
             if member.status not in ["creator", "administrator", "member"]:
                 return False
         except Exception as e:
-            logging.error(f"Ошибка проверки подписки {ch}: {e}")
+            logging.error(f"Obunani tekshirishda xatolik ({ch}): {e}")
             return False
     return True
 
@@ -147,7 +147,7 @@ async def get_main_keyboard():
         [InlineKeyboardButton(text="📝 Написать администратору", url=f"https://t.me/{ADMIN_USERNAME}")]
     ]
     chat_url = await get_setting('chat_link')
-    if chat_url.strip():
+    if chat_url and chat_url.strip():
         keyboard.append([InlineKeyboardButton(text="💬 Чат", url=chat_url)])
         
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -157,10 +157,10 @@ async def get_sub_keyboard():
     ch2 = await get_setting('channel_2')
     
     buttons = []
-    if ch1.strip():
+    if ch1 and ch1.strip():
         clean1 = ch1.replace("@", "")
         buttons.append([InlineKeyboardButton(text="📢 Канал 1", url=f"https://t.me/{clean1}")])
-    if ch2.strip():
+    if ch2 and ch2.strip():
         clean2 = ch2.replace("@", "")
         buttons.append([InlineKeyboardButton(text="📢 Канал 2", url=f"https://t.me/{clean2}")])
         
@@ -168,9 +168,9 @@ async def get_sub_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 async def get_admin_keyboard():
-    ch1 = await get_setting('channel_1') or "Не настроен"
-    ch2 = await get_setting('channel_2') or "Не настроен"
-    chat = await get_setting('chat_link') or "Не настроен"
+    ch1 = await get_setting('channel_1') or "Sozlanmagan"
+    ch2 = await get_setting('channel_2') or "Sozlanmagan"
+    chat = await get_setting('chat_link') or "Sozlanmagan"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
@@ -181,6 +181,8 @@ async def get_admin_keyboard():
             [InlineKeyboardButton(text="❌ Закрыть", callback_data="admin_close")]
         ]
     )
+
+# --- USER HANDLERS ---
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
@@ -213,177 +215,9 @@ async def start_handler(message: types.Message, command: CommandObject):
     except TelegramForbiddenError:
         pass
 
-# ==================== ADMIN PANEL ====================
-@dp.message(Command("admin"))
-async def admin_start(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_stats")
-async def admin_stats_handler(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-        
-    await callback.answer("⏳ Подсчет активных пользователей...", show_alert=False)
-    
-    total_users, total_points = await get_stats()
-    users = await get_all_users()
-
-    semaphore = asyncio.Semaphore(30)
-
-    async def check_user(uid):
-        async with semaphore:
-            try:
-                await bot.send_chat_action(chat_id=uid, action="typing")
-                return True
-            except Exception:
-                return False
-
-    results = await asyncio.gather(*[check_user(uid) for uid in users])
-    
-    active_users = sum(1 for r in results if r)
-    blocked_users = total_users - active_users
-
-    text = (
-        f"📊 <b>Статистика бота:</b>\n\n"
-        f"👤 Всего пользователей: <b>{total_users}</b>\n"
-        f"🟢 Активных пользователей: <b>{active_users}</b>\n"
-        f"🔴 Заблокировали бота: <b>{blocked_users}</b>\n"
-        f"⭐ Всего набрано баллов: <b>{total_points}</b>"
-    )
-    await callback.message.edit_text(text, reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_set_ch1")
-async def admin_set_ch1(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await state.set_state(AdminStates.waiting_for_ch1)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]])
-    await callback.message.edit_text("✏️ Отправьте username первого обязательного канала (например: <code>@mychannel</code>):", reply_markup=kb, parse_mode=ParseMode.HTML)
-
-@dp.message(AdminStates.waiting_for_ch1)
-async def process_ch1(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    channel_username = message.text.strip()
-    if not channel_username.startswith("@"):
-        channel_username = "@" + channel_username
-    await set_setting("channel_1", channel_username)
-    await state.clear()
-    await message.answer(f"✅ Канал 1 успешно обновлен: <b>{channel_username}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_set_ch2")
-async def admin_set_ch2(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await state.set_state(AdminStates.waiting_for_ch2)
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 Удалить 2-канал", callback_data="admin_remove_ch2")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]
-        ]
-    )
-    await callback.message.edit_text("✏️ Отправьте username второго обязательного канала (например: <code>@mychannel2</code>) или нажмите «Удалить»:", reply_markup=kb, parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_remove_ch2")
-async def admin_remove_ch2(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await set_setting("channel_2", "")
-    await state.clear()
-    await callback.message.edit_text("✅ Второй обязательный канал успешно удален!", reply_markup=await get_admin_keyboard())
-
-@dp.message(AdminStates.waiting_for_ch2)
-async def process_ch2(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    channel_username = message.text.strip()
-    if not channel_username.startswith("@"):
-        channel_username = "@" + channel_username
-    await set_setting("channel_2", channel_username)
-    await state.clear()
-    await message.answer(f"✅ Канал 2 успешно добавлен/обновлен: <b>{channel_username}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_set_chat")
-async def admin_set_chat(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await state.set_state(AdminStates.waiting_for_chat)
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 Удалить ссылку на чат", callback_data="admin_remove_chat")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]
-        ]
-    )
-    await callback.message.edit_text("✏️ Chat guruhining to'liq havolasini yuboring (masalan: <code>https://t.me/chat_link</code>) yoki o'chirish tugmasini bosing:", reply_markup=kb, parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_remove_chat")
-async def admin_remove_chat(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await set_setting("chat_link", "")
-    await state.clear()
-    await callback.message.edit_text("✅ Chat havolasi muvaffaqiyatli o'chirildi!", reply_markup=await get_admin_keyboard())
-
-@dp.message(AdminStates.waiting_for_chat)
-async def process_chat(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    chat_url = message.text.strip()
-    await set_setting("chat_link", chat_url)
-    await state.clear()
-    await message.answer(f"✅ Chat linki muvaffaqiyatli saqlandi: <b>{chat_url}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_cancel_settings")
-async def admin_cancel_settings(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_broadcast")
-async def admin_broadcast_handler(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await state.set_state(AdminStates.waiting_for_broadcast)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]])
-    await callback.message.edit_text("📢 Отправьте сообщение, которое будет разослано всем пользователям:", reply_markup=kb)
-
-@dp.message(AdminStates.waiting_for_broadcast)
-async def process_broadcast(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await state.clear()
-    
-    users = await get_all_users()
-    await message.answer(f"⏳ Начинаем рассылку для {len(users)} пользователей...")
-    
-    success = 0
-    failed = 0
-    
-    for uid in users:
-        try:
-            await message.copy_to(chat_id=uid)
-            success += 1
-            await asyncio.sleep(0.05)
-        except (TelegramForbiddenError, TelegramAPIError, Exception):
-            failed += 1
-            
-    await message.answer(
-        f"✅ <b>Рассылка завершена!</b>\n\n"
-        f"🎉 Успешно отправлено: <b>{success}</b>\n"
-        f"❌ Не доставлено: <b>{failed}</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=await get_admin_keyboard()
-    )
-
-@dp.callback_query(F.data == "admin_close")
-async def admin_close_handler(callback: CallbackQuery):
-    await callback.message.delete()
-
-# ======================================================
-
 @dp.callback_query(F.data == "check_sub")
 async def check_sub_callback(callback: CallbackQuery):
+    await callback.answer()
     user_id = callback.from_user.id
     is_sub = await check_subscription(user_id)
     
@@ -420,6 +254,7 @@ async def check_sub_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "channels")
 async def channels_handler(callback: CallbackQuery):
+    await callback.answer()
     is_sub = await check_subscription(callback.from_user.id)
     if not is_sub:
         await callback.answer("⚠️ Сначала подпишитесь на все обязательные каналы!", show_alert=True)
@@ -431,10 +266,14 @@ async def channels_handler(callback: CallbackQuery):
             [InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]
         ]
     )
-    await callback.message.edit_text("👇 Вы можете перейти в наш приватный канал по кнопке ниже:", reply_markup=kb)
+    try:
+        await callback.message.edit_text("👇 Вы можете перейти в наш приватный канал по кнопке ниже:", reply_markup=kb)
+    except TelegramBadRequest:
+        pass
 
 @dp.callback_query(F.data == "free_channel")
 async def free_channel_handler(callback: CallbackQuery):
+    await callback.answer()
     user_id = callback.from_user.id
     is_sub = await check_subscription(user_id)
     if not is_sub:
@@ -475,7 +314,10 @@ async def free_channel_handler(callback: CallbackQuery):
                     f"⏳ Срок действия вашего текущего доступа: до <b>{expire_str}</b>.\n"
                     f"По истечении этого времени вы сможете активировать доступ снова."
                 )
-                await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
+                try:
+                    await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
+                except TelegramBadRequest:
+                    pass
                 return
         except Exception:
             pass
@@ -510,32 +352,222 @@ async def free_channel_handler(callback: CallbackQuery):
                 f"<i>Ссылка ниже одноразовая и действительна в течение 10 минут только для 1 человека!</i>"
             )
         except Exception as e:
-            logging.error(f"Ошибка создания ссылки: {e}")
+            logging.error(f"Ssilka yaratishda xato: {e}")
             text += "⚠️ Произошла ошибка при создании ссылки. Убедитесь, что бот является администратором закрытого канала с правом приглашения пользователей."
             kb = kb_back
     else:
         text += f"💡 Для получения доступа вам осталось набрать ещё <b>{REQUIRED_REFERRALS - points}</b> баллов."
         kb = kb_back
 
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except TelegramBadRequest:
+        pass
 
 @dp.callback_query(F.data == "help")
 async def help_handler(callback: CallbackQuery):
+    await callback.answer()
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]
         ]
     )
     help_text = "🤖 <b>Помощник / Информация</b>\n\n1. <b>Каналы</b> — Список наших основных ресурсов.\n2. <b>Бесплатный канал</b> — Приглашайте друзей по своей ссылке, копите баллы и получайте бесплатный доступ к закрытому каналу!\n\nЕсли у вас возникли вопросы, свяжитесь с администратором."
-    await callback.message.edit_text(help_text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    try:
+        await callback.message.edit_text(help_text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except TelegramBadRequest:
+        pass
 
 @dp.callback_query(F.data == "back_main")
 async def back_main_handler(callback: CallbackQuery):
+    await callback.answer()
     first_name = html.escape(callback.from_user.first_name)
     welcome_text = f"💥 <b>Добро пожаловать, {first_name}!</b>\n‹━━━━━━━━━━━━━━━━›\n\n🔥 Приватный архив 18+\n— эксклюзивный контент\n— доступ только для участников\n\n👇 <b>Выбери раздел</b> 👇"
-    await callback.message.edit_text(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
+    try:
+        await callback.message.edit_text(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
+    except TelegramBadRequest:
+        pass
 
-# --- AVTOMATIK KANALO'DAN CHIQARISH (XAVFSIZ TEKSHIRUV) ---
+# ==================== ADMIN PANEL ====================
+@dp.message(Command("admin"))
+async def admin_start(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats_handler(callback: CallbackQuery):
+    await callback.answer()
+    if callback.from_user.id != ADMIN_ID:
+        return
+        
+    await callback.answer("⏳ Подсчет активных пользователей...", show_alert=False)
+    
+    total_users, total_points = await get_stats()
+    users = await get_all_users()
+
+    semaphore = asyncio.Semaphore(30)
+
+    async def check_user(uid):
+        async with semaphore:
+            try:
+                await bot.send_chat_action(chat_id=uid, action="typing")
+                return True
+            except Exception:
+                return False
+
+    results = await asyncio.gather(*[check_user(uid) for uid in users])
+    
+    active_users = sum(1 for r in results if r)
+    blocked_users = total_users - active_users
+
+    text = (
+        f"📊 <b>Статистика бота:</b>\n\n"
+        f"👤 Всего пользователей: <b>{total_users}</b>\n"
+        f"🟢 Активных пользователей: <b>{active_users}</b>\n"
+        f"🔴 Заблокировали бота: <b>{blocked_users}</b>\n"
+        f"⭐ Всего набрано баллов: <b>{total_points}</b>"
+    )
+    try:
+        await callback.message.edit_text(text, reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    except TelegramBadRequest:
+        pass
+
+@dp.callback_query(F.data == "admin_set_ch1")
+async def admin_set_ch1(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_for_ch1)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]])
+    await callback.message.edit_text("✏️ Отправьте username первого обязательного канала (например: <code>@mychannel</code>):", reply_markup=kb, parse_mode=ParseMode.HTML)
+
+@dp.message(AdminStates.waiting_for_ch1)
+async def process_ch1(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    channel_username = message.text.strip()
+    if not channel_username.startswith("@"):
+        channel_username = "@" + channel_username
+    await set_setting("channel_1", channel_username)
+    await state.clear()
+    await message.answer(f"✅ Канал 1 успешно обновлен: <b>{channel_username}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_set_ch2")
+async def admin_set_ch2(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_for_ch2)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Удалить 2-канал", callback_data="admin_remove_ch2")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]
+        ]
+    )
+    await callback.message.edit_text("✏️ Отправьте username второго обязательного канала (например: <code>@mychannel2</code>) или нажмите «Удалить»:", reply_markup=kb, parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_remove_ch2")
+async def admin_remove_ch2(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await set_setting("channel_2", "")
+    await state.clear()
+    await callback.message.edit_text("✅ Второй обязательный канал успешно удален!", reply_markup=await get_admin_keyboard())
+
+@dp.message(AdminStates.waiting_for_ch2)
+async def process_ch2(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    channel_username = message.text.strip()
+    if not channel_username.startswith("@"):
+        channel_username = "@" + channel_username
+    await set_setting("channel_2", channel_username)
+    await state.clear()
+    await message.answer(f"✅ Канал 2 успешно добавлен/обновлен: <b>{channel_username}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_set_chat")
+async def admin_set_chat(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_for_chat)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Удалить ссылку на чат", callback_data="admin_remove_chat")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]
+        ]
+    )
+    await callback.message.edit_text("✏️ Chat guruhining to'liq havolasini yuboring (masalan: <code>https://t.me/chat_link</code>) yoki o'chirish tugmasini bosing:", reply_markup=kb, parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_remove_chat")
+async def admin_remove_chat(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await set_setting("chat_link", "")
+    await state.clear()
+    await callback.message.edit_text("✅ Chat havolasi muvaffaqiyatli o'chirildi!", reply_markup=await get_admin_keyboard())
+
+@dp.message(AdminStates.waiting_for_chat)
+async def process_chat(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    chat_url = message.text.strip()
+    await set_setting("chat_link", chat_url)
+    await state.clear()
+    await message.answer(f"✅ Chat linki muvaffaqiyatli saqlandi: <b>{chat_url}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_cancel_settings")
+async def admin_cancel_settings(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    await callback.message.edit_text("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_handler(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if callback.from_user.id != ADMIN_ID:
+        return
+    await state.set_state(AdminStates.waiting_for_broadcast)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]])
+    await callback.message.edit_text("📢 Отправьте сообщение, которое будет разослано всем пользователям:", reply_markup=kb)
+
+@dp.message(AdminStates.waiting_for_broadcast)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    
+    users = await get_all_users()
+    await message.answer(f"⏳ Начинаем рассылку для {len(users)} пользователей...")
+    
+    success = 0
+    failed = 0
+    
+    for uid in users:
+        try:
+            await message.copy_to(chat_id=uid)
+            success += 1
+            await asyncio.sleep(0.05)
+        except (TelegramForbiddenError, TelegramAPIError, Exception):
+            failed += 1
+            
+    await message.answer(
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"🎉 Успешно отправлено: <b>{success}</b>\n"
+        f"❌ Не доставлено: <b>{failed}</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=await get_admin_keyboard()
+    )
+
+@dp.callback_query(F.data == "admin_close")
+async def admin_close_handler(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.delete()
+
+# --- AVTOMATIK KANALO'DAN CHIQARISH ---
 async def auto_kick_expired_users():
     while True:
         try:
@@ -565,7 +597,7 @@ async def auto_kick_expired_users():
                                             )
                                         except (TelegramForbiddenError, Exception):
                                             pass
-                                        logging.info(f"Foydalanuvchi {u_id} kanaldan chiqarildi (muddati tugagan).")
+                                        logging.info(f"Foydalanuvchi {u_id} kanaldan chiqarildi.")
                                 except Exception as e:
                                     logging.error(f"Kanal a'zosini kick qilishda xato ({u_id}): {e}")
 
@@ -573,7 +605,7 @@ async def auto_kick_expired_users():
                         except Exception as ex:
                             logging.error(f"Sana parse qilishda xato: {ex}")
         except Exception as e:
-            logging.error(f"Ошибка в auto_kick_expired_users: {e}")
+            logging.error(f"Xatolik auto_kick_expired_users: {e}")
 
         await asyncio.sleep(60)
 
