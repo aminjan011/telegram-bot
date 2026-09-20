@@ -17,7 +17,7 @@ from aiohttp import web
 logging.basicConfig(level=logging.INFO)
 
 # ==================== SOZLAMA (SETTINGS) ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8932013152:AAHm6khUTUG4DexDCxrRXoxLyFP7sxAAZJ8")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8932013152:AAFbV_8mNECLC8Ctk7rkcKCg3Od60CUpZ8o")
 PRIVATE_CHANNEL_ID = -1004324882879
 CHANNELS_SECTION_LINK = "https://t.me/+_AxorsmPVYE2M2Ji"
 REQUIRED_REFERRALS = 10
