@@ -1,10 +1,9 @@
 import os
 import logging
-import psycopg2
-from psycopg2 import pool
 import html
 import asyncio
 from datetime import datetime, timedelta
+import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, CommandObject, Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -18,7 +17,7 @@ from aiohttp import web
 logging.basicConfig(level=logging.INFO)
 
 # ==================== SOZLAMA (SETTINGS) ====================
-BOT_TOKEN = "8932013152:AAHm6khUTUG4DexDCxrRXoxLyFP7sxAAZJ8"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8932013152:AAHm6khUTUG4DexDCxrRXoxLyFP7sxAAZJ8")
 PRIVATE_CHANNEL_ID = -1004324882879
 CHANNELS_SECTION_LINK = "https://t.me/+_AxorsmPVYE2M2Ji"
 REQUIRED_REFERRALS = 10
@@ -39,138 +38,94 @@ class AdminStates(StatesGroup):
     waiting_for_broadcast = State()
     waiting_for_ch1 = State()
     waiting_for_ch2 = State()
-    waiting_for_chat = State()  # Chat linkini kutish holati
+    waiting_for_chat = State()
 
-# --- DATABASE CONNECTION POOL ---
-db_pool = None
-if DATABASE_URL:
-    try:
-        db_pool = psycopg2.pool.SimpleConnectionPool(1, 20, DATABASE_URL, sslmode='require')
-    except Exception as e:
-        logging.error(f"Pool yaratishda xato: {e}")
+# --- ASYNC DATABASE CONNECTION POOL ---
+db_pool: asyncpg.Pool = None
 
-def get_db():
-    if db_pool:
-        return db_pool.getconn()
-    return psycopg2.connect(DATABASE_URL, sslmode='require')
+async def init_db_pool():
+    global db_pool
+    if DATABASE_URL:
+        try:
+            db_pool = await asyncpg.create_pool(dsn=DATABASE_URL, min_size=1, max_size=10)
+            async with db_pool.acquire() as conn:
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id BIGINT PRIMARY KEY,
+                        referrer_id BIGINT,
+                        points INT DEFAULT 0,
+                        has_access INT DEFAULT 0,
+                        expire_date TEXT
+                    )
+                ''')
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )
+                ''')
+                await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
+                await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
+                await conn.execute("INSERT INTO settings (key, value) VALUES ('chat_link', '') ON CONFLICT (key) DO NOTHING")
+            logging.info("База данных успешно инициализирована через asyncpg!")
+        except Exception as e:
+            logging.error(f"Ошибка подключения к базе данных: {e}")
 
-def release_db(conn):
-    if db_pool and conn:
-        db_pool.putconn(conn)
-    elif conn:
-        conn.close()
+async def get_setting(key: str) -> str:
+    if not db_pool:
+        return ""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", key)
+        return row['value'] if row else ""
 
-def init_db():
-    if not DATABASE_URL:
-        logging.error("DATABASE_URL topilmadi!")
+async def set_setting(key: str, value: str):
+    if not db_pool:
         return
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                referrer_id BIGINT,
-                points INT DEFAULT 0,
-                has_access INT DEFAULT 0,
-                expire_date TEXT
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        ''')
-        cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
-        cursor.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
-        cursor.execute("INSERT INTO settings (key, value) VALUES ('chat_link', '') ON CONFLICT (key) DO NOTHING")
-        conn.commit()
-        cursor.close()
-    finally:
-        release_db(conn)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            key, value
+        )
 
-init_db()
-
-def get_setting(key: str) -> str:
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
-        row = cursor.fetchone()
-        cursor.close()
-        return row[0] if row else ""
-    finally:
-        release_db(conn)
-
-def set_setting(key: str, value: str):
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (key, value))
-        conn.commit()
-        cursor.close()
-    finally:
-        release_db(conn)
-
-def get_user(user_id: int):
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, referrer_id, points, has_access, expire_date FROM users WHERE user_id = %s", (user_id,))
-        row = cursor.fetchone()
-        cursor.close()
+async def get_user(user_id: int):
+    if not db_pool:
+        return None
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT user_id, referrer_id, points, has_access, expire_date FROM users WHERE user_id = $1", user_id)
         return row
-    finally:
-        release_db(conn)
 
-def add_user(user_id: int, referrer_id: int = None):
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (user_id, referrer_id) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, referrer_id))
-        conn.commit()
-        cursor.close()
-    finally:
-        release_db(conn)
+async def add_user(user_id: int, referrer_id: int = None):
+    if not db_pool:
+        return
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO users (user_id, referrer_id) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
+            user_id, referrer_id
+        )
 
-def add_point(user_id: int):
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET points = points + 1 WHERE user_id = %s", (user_id,))
-        conn.commit()
-        cursor.close()
-    finally:
-        release_db(conn)
+async def add_point(user_id: int):
+    if not db_pool:
+        return
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE users SET points = points + 1 WHERE user_id = $1", user_id)
 
-def get_stats():
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*), COALESCE(SUM(points), 0) FROM users")
-        stats = cursor.fetchone()
-        cursor.close()
-        total_users = stats[0] if stats[0] else 0
-        total_points = stats[1] if stats[1] else 0
-        return total_users, total_points
-    finally:
-        release_db(conn)
+async def get_stats():
+    if not db_pool:
+        return 0, 0
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT COUNT(*), COALESCE(SUM(points), 0) FROM users")
+        return row[0], row[1]
 
-def get_all_users():
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users")
-        rows = cursor.fetchall()
-        cursor.close()
-        return [r[0] for r in rows]
-    finally:
-        release_db(conn)
+async def get_all_users():
+    if not db_pool:
+        return []
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM users")
+        return [r['user_id'] for r in rows]
 
 async def check_subscription(user_id: int) -> bool:
-    ch1 = get_setting('channel_1')
-    ch2 = get_setting('channel_2')
+    ch1 = await get_setting('channel_1')
+    ch2 = await get_setting('channel_2')
     
     channels_to_check = [c for c in [ch1, ch2] if c.strip()]
     
@@ -184,22 +139,22 @@ async def check_subscription(user_id: int) -> bool:
             return False
     return True
 
-def get_main_keyboard():
+async def get_main_keyboard():
     keyboard = [
         [InlineKeyboardButton(text="📁 Каналы", callback_data="channels")],
         [InlineKeyboardButton(text="⚡ Бесплатный канал", callback_data="free_channel")],
         [InlineKeyboardButton(text="🤖 Помощник", callback_data="help")],
         [InlineKeyboardButton(text="📝 Написать администратору", url=f"https://t.me/{ADMIN_USERNAME}")]
     ]
-    chat_url = get_setting('chat_link')
+    chat_url = await get_setting('chat_link')
     if chat_url.strip():
         keyboard.append([InlineKeyboardButton(text="💬 Чат", url=chat_url)])
         
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-def get_sub_keyboard():
-    ch1 = get_setting('channel_1')
-    ch2 = get_setting('channel_2')
+async def get_sub_keyboard():
+    ch1 = await get_setting('channel_1')
+    ch2 = await get_setting('channel_2')
     
     buttons = []
     if ch1.strip():
@@ -212,10 +167,10 @@ def get_sub_keyboard():
     buttons.append([InlineKeyboardButton(text="🔄 Проверить подписку", callback_data="check_sub")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_admin_keyboard():
-    ch1 = get_setting('channel_1') or "Не настроен"
-    ch2 = get_setting('channel_2') or "Не настроен"
-    chat = get_setting('chat_link') or "Не настроен"
+async def get_admin_keyboard():
+    ch1 = await get_setting('channel_1') or "Не настроен"
+    ch2 = await get_setting('channel_2') or "Не настроен"
+    chat = await get_setting('chat_link') or "Не настроен"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
@@ -238,26 +193,32 @@ async def start_handler(message: types.Message, command: CommandObject):
         if ref_candidate != user_id:
             referrer_id = ref_candidate
 
-    user = get_user(user_id)
+    user = await get_user(user_id)
     if not user:
-        add_user(user_id, referrer_id)
+        await add_user(user_id, referrer_id)
     
     is_sub = await check_subscription(user_id)
     if not is_sub:
         sub_text = "⚠️ <b>Для использования бота необходимо подписаться на наши каналы!</b>\n\nПосле подписки нажмите кнопку «Проверить подписку»."
-        await message.answer(sub_text, reply_markup=get_sub_keyboard(), parse_mode=ParseMode.HTML)
+        try:
+            await message.answer(sub_text, reply_markup=await get_sub_keyboard(), parse_mode=ParseMode.HTML)
+        except TelegramForbiddenError:
+            pass
         return
 
     first_name = html.escape(message.from_user.first_name)
     welcome_text = f"💥 <b>Добро пожаловать, {first_name}!</b>\n‹━━━━━━━━━━━━━━━━━━›\n\n🔥 Приватный архив 18+\n— эксклюзивный контент\n— доступ только для участников\n\n👇 <b>Выбери раздел</b> 👇"
-    await message.answer(welcome_text, reply_markup=get_main_keyboard(), parse_mode=ParseMode.HTML)
+    try:
+        await message.answer(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
+    except TelegramForbiddenError:
+        pass
 
 # ==================== ADMIN PANEL ====================
 @dp.message(Command("admin"))
 async def admin_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("👑 <b>Панель администратора</b>", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await message.answer("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats_handler(callback: CallbackQuery):
@@ -266,8 +227,8 @@ async def admin_stats_handler(callback: CallbackQuery):
         
     await callback.answer("⏳ Подсчет активных пользователей...", show_alert=False)
     
-    total_users, total_points = get_stats()
-    users = get_all_users()
+    total_users, total_points = await get_stats()
+    users = await get_all_users()
 
     semaphore = asyncio.Semaphore(30)
 
@@ -291,7 +252,7 @@ async def admin_stats_handler(callback: CallbackQuery):
         f"🔴 Заблокировали бота: <b>{blocked_users}</b>\n"
         f"⭐ Всего набрано баллов: <b>{total_points}</b>"
     )
-    await callback.message.edit_text(text, reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await callback.message.edit_text(text, reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_set_ch1")
 async def admin_set_ch1(callback: CallbackQuery, state: FSMContext):
@@ -308,9 +269,9 @@ async def process_ch1(message: types.Message, state: FSMContext):
     channel_username = message.text.strip()
     if not channel_username.startswith("@"):
         channel_username = "@" + channel_username
-    set_setting("channel_1", channel_username)
+    await set_setting("channel_1", channel_username)
     await state.clear()
-    await message.answer(f"✅ Канал 1 успешно обновлен: <b>{channel_username}</b>", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await message.answer(f"✅ Канал 1 успешно обновлен: <b>{channel_username}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_set_ch2")
 async def admin_set_ch2(callback: CallbackQuery, state: FSMContext):
@@ -329,9 +290,9 @@ async def admin_set_ch2(callback: CallbackQuery, state: FSMContext):
 async def admin_remove_ch2(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         return
-    set_setting("channel_2", "")
+    await set_setting("channel_2", "")
     await state.clear()
-    await callback.message.edit_text("✅ Второй обязательный канал успешно удален!", reply_markup=get_admin_keyboard())
+    await callback.message.edit_text("✅ Второй обязательный канал успешно удален!", reply_markup=await get_admin_keyboard())
 
 @dp.message(AdminStates.waiting_for_ch2)
 async def process_ch2(message: types.Message, state: FSMContext):
@@ -340,9 +301,9 @@ async def process_ch2(message: types.Message, state: FSMContext):
     channel_username = message.text.strip()
     if not channel_username.startswith("@"):
         channel_username = "@" + channel_username
-    set_setting("channel_2", channel_username)
+    await set_setting("channel_2", channel_username)
     await state.clear()
-    await message.answer(f"✅ Канал 2 успешно добавлен/обновлен: <b>{channel_username}</b>", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await message.answer(f"✅ Канал 2 успешно добавлен/обновлен: <b>{channel_username}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_set_chat")
 async def admin_set_chat(callback: CallbackQuery, state: FSMContext):
@@ -361,23 +322,23 @@ async def admin_set_chat(callback: CallbackQuery, state: FSMContext):
 async def admin_remove_chat(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         return
-    set_setting("chat_link", "")
+    await set_setting("chat_link", "")
     await state.clear()
-    await callback.message.edit_text("✅ Chat havolasi muvaffaqiyatli o'chirildi!", reply_markup=get_admin_keyboard())
+    await callback.message.edit_text("✅ Chat havolasi muvaffaqiyatli o'chirildi!", reply_markup=await get_admin_keyboard())
 
 @dp.message(AdminStates.waiting_for_chat)
 async def process_chat(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     chat_url = message.text.strip()
-    set_setting("chat_link", chat_url)
+    await set_setting("chat_link", chat_url)
     await state.clear()
-    await message.answer(f"✅ Chat linki muvaffaqiyatli saqlandi: <b>{chat_url}</b>", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await message.answer(f"✅ Chat linki muvaffaqiyatli saqlandi: <b>{chat_url}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_cancel_settings")
 async def admin_cancel_settings(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("👑 <b>Панель администратора</b>", reply_markup=get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await callback.message.edit_text("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_handler(callback: CallbackQuery, state: FSMContext):
@@ -393,7 +354,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         return
     await state.clear()
     
-    users = get_all_users()
+    users = await get_all_users()
     await message.answer(f"⏳ Начинаем рассылку для {len(users)} пользователей...")
     
     success = 0
@@ -404,7 +365,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
             await message.copy_to(chat_id=uid)
             success += 1
             await asyncio.sleep(0.05)
-        except Exception:
+        except (TelegramForbiddenError, TelegramAPIError, Exception):
             failed += 1
             
     await message.answer(
@@ -412,7 +373,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         f"🎉 Успешно отправлено: <b>{success}</b>\n"
         f"❌ Не доставлено: <b>{failed}</b>",
         parse_mode=ParseMode.HTML,
-        reply_markup=get_admin_keyboard()
+        reply_markup=await get_admin_keyboard()
     )
 
 @dp.callback_query(F.data == "admin_close")
@@ -427,31 +388,33 @@ async def check_sub_callback(callback: CallbackQuery):
     is_sub = await check_subscription(user_id)
     
     if is_sub:
-        user = get_user(user_id)
-        if user and user[1]:
-            add_point(user[1])
+        user = await get_user(user_id)
+        if user and user['referrer_id']:
+            await add_point(user['referrer_id'])
             try:
                 await bot.send_message(
-                    user[1], 
+                    user['referrer_id'], 
                     "🎉 Пользователь, которого вы пригласили, подписался на канал! Вам начислен <b>+1 балл</b>.",
                     parse_mode=ParseMode.HTML
                 )
-            except Exception:
+            except (TelegramForbiddenError, Exception):
                 pass
             
-            conn = get_db()
-            try:
-                cursor = conn.cursor()
-                cursor.execute("UPDATE users SET referrer_id = NULL WHERE user_id = %s", (user_id,))
-                conn.commit()
-                cursor.close()
-            finally:
-                release_db(conn)
+            if db_pool:
+                async with db_pool.acquire() as conn:
+                    await conn.execute("UPDATE users SET referrer_id = NULL WHERE user_id = $1", user_id)
 
-        await callback.message.delete()
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+            
         first_name = html.escape(callback.from_user.first_name)
         welcome_text = f"💥 <b>Добро пожаловать, {first_name}!</b>\n‹━━━━━━━━━━━━━━›\n\n🔥 Приватный архив 18+\n— эксклюзивный контент\n— доступ только для участников\n\n👇 <b>Выбери раздел</b> 👇"
-        await callback.message.answer(welcome_text, reply_markup=get_main_keyboard(), parse_mode=ParseMode.HTML)
+        try:
+            await callback.message.answer(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
+        except TelegramForbiddenError:
+            pass
     else:
         await callback.answer("❌ Вы еще не подписались на все каналы!", show_alert=True)
 
@@ -481,11 +444,10 @@ async def free_channel_handler(callback: CallbackQuery):
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
     
-    user = get_user(user_id)
-    points = user[2] if user else 0
-    expire_str = user[4] if user else None
+    user = await get_user(user_id)
+    points = user['points'] if user else 0
+    expire_str = user['expire_date'] if user else None
 
-    # Foydalanuvchi hozirda yopiq kanalda bor-yo'qligini tekshirish
     is_in_private_channel = False
     try:
         member = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
@@ -504,7 +466,6 @@ async def free_channel_handler(callback: CallbackQuery):
 
     kb_back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]])
 
-    # 1-HOLAT: Foydalanuvchi allaqachon kanalda bor va muddati tugamagan
     if is_in_private_channel and expire_str:
         try:
             exp_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
@@ -519,19 +480,13 @@ async def free_channel_handler(callback: CallbackQuery):
         except Exception:
             pass
 
-    # 2-HOLAT: 10 ball yig'ilgan va kanalda yo'q (yoki muddati tugagan)
     if points >= REQUIRED_REFERRALS:
         expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
         expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
         
-        conn = get_db()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET expire_date = %s WHERE user_id = %s", (expire_date_str, user_id))
-            conn.commit()
-            cursor.close()
-        finally:
-            release_db(conn)
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                await conn.execute("UPDATE users SET expire_date = $1 WHERE user_id = $2", expire_date_str, user_id)
 
         try:
             expire_time = datetime.now() + timedelta(minutes=10)
@@ -578,50 +533,45 @@ async def help_handler(callback: CallbackQuery):
 async def back_main_handler(callback: CallbackQuery):
     first_name = html.escape(callback.from_user.first_name)
     welcome_text = f"💥 <b>Добро пожаловать, {first_name}!</b>\n‹━━━━━━━━━━━━━━━━›\n\n🔥 Приватный архив 18+\n— эксклюзивный контент\n— доступ только для участников\n\n👇 <b>Выбери раздел</b> 👇"
-    await callback.message.edit_text(welcome_text, reply_markup=get_main_keyboard(), parse_mode=ParseMode.HTML)
+    await callback.message.edit_text(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
 
 # --- AVTOMATIK KANALO'DAN CHIQARISH (XAVFSIZ TEKSHIRUV) ---
 async def auto_kick_expired_users():
     while True:
         try:
-            conn = get_db()
-            try:
-                cursor = conn.cursor()
-                now = datetime.now()
-                
-                cursor.execute("SELECT user_id, expire_date FROM users WHERE expire_date IS NOT NULL AND expire_date != ''")
-                users = cursor.fetchall()
+            if db_pool:
+                async with db_pool.acquire() as conn:
+                    now = datetime.now()
+                    users = await conn.fetch("SELECT user_id, expire_date FROM users WHERE expire_date IS NOT NULL AND expire_date != ''")
 
-                for u_id, expire_str in users:
-                    try:
-                        expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
-                        if now >= expire_dt:
-                            # Telegram'da haqiqatan ham kanalda bormi, tekshiramiz
-                            try:
-                                member = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                                if member.status in ["member", "restricted"]:
-                                    await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                                    await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                                    await bot.send_message(
-                                        u_id,
-                                        f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
-                                        f"Вы были автоматически исключены из закрытого канала. "
-                                        f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
-                                        parse_mode=ParseMode.HTML
-                                    )
-                                    logging.info(f"Foydalanuvchi {u_id} kanaldan chiqarildi (muddati tugagan).")
-                            except Exception as e:
-                                logging.error(f"Kanal a'zosini kick qilishda xato ({u_id}): {e}")
+                    for r in users:
+                        u_id = r['user_id']
+                        expire_str = r['expire_date']
+                        try:
+                            expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
+                            if now >= expire_dt:
+                                try:
+                                    member = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                    if member.status in ["member", "restricted"]:
+                                        await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                        await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                        try:
+                                            await bot.send_message(
+                                                u_id,
+                                                f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
+                                                f"Вы были автоматически исключены из закрытого канала. "
+                                                f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
+                                                parse_mode=ParseMode.HTML
+                                            )
+                                        except (TelegramForbiddenError, Exception):
+                                            pass
+                                        logging.info(f"Foydalanuvchi {u_id} kanaldan chiqarildi (muddati tugagan).")
+                                except Exception as e:
+                                    logging.error(f"Kanal a'zosini kick qilishda xato ({u_id}): {e}")
 
-                            # Muddati tugagach, bazani tozalaymiz
-                            cursor.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = %s", (u_id,))
-                            conn.commit()
-                    except Exception as ex:
-                        logging.error(f"Sana parse qilishda xato: {ex}")
-
-                cursor.close()
-            finally:
-                release_db(conn)
+                                await conn.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = $1", u_id)
+                        except Exception as ex:
+                            logging.error(f"Sana parse qilishda xato: {ex}")
         except Exception as e:
             logging.error(f"Ошибка в auto_kick_expired_users: {e}")
 
@@ -629,10 +579,11 @@ async def auto_kick_expired_users():
 
 # --- WEBHOOK ISHGA TUSHMASI ---
 async def on_startup(app):
+    await init_db_pool()
     asyncio.create_task(auto_kick_expired_users())
     if RENDER_EXTERNAL_URL:
         webhook_url = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
-        await bot.set_webhook(webhook_url)
+        await bot.set_webhook(webhook_url, drop_pending_updates=True)
         logging.info(f"Webhook o'rnatildi: {webhook_url}")
     else:
         logging.warning("RENDER_EXTERNAL_URL topilmadi. Webhook o'rnatilmadi.")
