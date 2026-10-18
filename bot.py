@@ -207,7 +207,7 @@ async def start_handler(message: types.Message, command: CommandObject):
 
     first_name = html.escape(message.from_user.first_name)
     welcome_text = (
-        f"🌌 <b>Добро пожаловать в Nexus Hub, {first_name}</b>\n"
+        f"🌌 <b>Добро пожаловать в hello.kz, {first_name}</b>\n"
         f"┌────────────────────────\n"
         f"│ ⚡ Статус: <code>Авторизован</code>\n"
         f"│ 📂 Доступ: <code>Активен</code>\n"
