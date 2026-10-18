@@ -23,13 +23,14 @@ from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
+# ==================== СОЗЛАМА (SETTINGS) ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8932013152:AAFbV_8mNECLC8Ctk7rkcKCg3Od60CUpZ8o")
 PRIVATE_CHANNEL_ID = -1004324882879
 CHANNELS_SECTION_LINK = "https://t.me/+j2RWAdcz2FwwMGVi"
 REQUIRED_REFERRALS = 10
 SUB_DAYS = 10
-WELCOME_BONUS = 2
-TRIAL_SECONDS = 60
+WELCOME_BONUS = 2        # Startda beriladigan sovg'a ball
+TRIAL_SECONDS = 60       # Test-драйв вақти (60 сония)
 ADMIN_USERNAME = "zyroxcv"
 ADMIN_ID = 1112793157
 
@@ -37,6 +38,7 @@ WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
 PORT = int(os.getenv("PORT", 8080))
+# ============================================================
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -51,7 +53,9 @@ class AdminStates(StatesGroup):
     waiting_for_chat = State()
     waiting_for_promo = State()
     waiting_for_preview = State()
+    waiting_for_daily_reward = State()
 
+# --- БАЗА ДАННЫХ ---
 db_pool: asyncpg.Pool = None
 
 async def init_db_pool():
@@ -81,10 +85,16 @@ async def init_db_pool():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_used INT DEFAULT 0")
 
                 await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )
                 ''')
                 await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS promocodes (code TEXT PRIMARY KEY, reward INT)
+                    CREATE TABLE IF NOT EXISTS promocodes (
+                        code TEXT PRIMARY KEY,
+                        reward INT
+                    )
                 ''')
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
@@ -92,9 +102,10 @@ async def init_db_pool():
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_file_id', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_type', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_caption', '') ON CONFLICT (key) DO NOTHING")
-            logging.info("Baza muvaffaqiyatli ishga tushdi!")
+                await conn.execute("INSERT INTO settings (key, value) VALUES ('daily_reward', '1') ON CONFLICT (key) DO NOTHING")
+            logging.info("База данных успешно инициализирована!")
         except Exception as e:
-            logging.error(f"Baza xatosi: {e}")
+            logging.error(f"Ошибка БД: {e}")
 
 async def get_setting(key: str) -> str:
     if not db_pool: return ""
@@ -105,7 +116,10 @@ async def get_setting(key: str) -> str:
 async def set_setting(key: str, value: str):
     if not db_pool: return
     async with db_pool.acquire() as conn:
-        await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", key, value)
+        await conn.execute(
+            "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            key, value
+        )
 
 async def get_user(user_id: int):
     if not db_pool: return None
@@ -116,12 +130,10 @@ async def add_user(user_id: int, referrer_id: int = None):
     if not db_pool: return
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     async with db_pool.acquire() as conn:
-        await conn.execute("INSERT INTO users (user_id, referrer_id, joined_at) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING", user_id, referrer_id, now_str)
-
-async def add_point(user_id: int, amount: int = 1):
-    if not db_pool: return
-    async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE users SET points = points + $1 WHERE user_id = $2", amount, user_id)
+        await conn.execute(
+            "INSERT INTO users (user_id, referrer_id, joined_at) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING",
+            user_id, referrer_id, now_str
+        )
 
 async def get_stats():
     if not db_pool: return 0, 0
@@ -175,10 +187,11 @@ async def kick_after_trial(user_id: int, delay: int = TRIAL_SECONDS):
             [InlineKeyboardButton(text="📤 Поделиться", url=share_url)],
             [InlineKeyboardButton(text="⚡ VIP на 10 дней", callback_data="free_channel")]
         ])
-        await bot.send_message(user_id, "⏱ <b>Тест-драйв завершен!</b>\nХотите полный доступ?", parse_mode=ParseMode.HTML, reply_markup=kb)
+        await bot.send_message(user_id, "⏱ <b>Тест-драйв завершен!</b>\nХотите полный доступ на 10 дней?", parse_mode=ParseMode.HTML, reply_markup=kb)
     except Exception:
         pass
 
+# --- КЛАВИАТУРЫ ---
 async def get_main_keyboard(user_id: int):
     user = await get_user(user_id)
     points = user['points'] if user else 0
@@ -186,7 +199,7 @@ async def get_main_keyboard(user_id: int):
     vip_text = "🟢 Забрать VIP" if points >= REQUIRED_REFERRALS else "⚡ Получить VIP"
 
     kb = [
-        [InlineKeyboardButton(text="🪪 Профиль", callback_data="profile"), InlineKeyboardButton(text="🎁 Бонус", callback_data="daily_bonus")],
+        [InlineKeyboardButton(text="🪪 Профиль", callback_data="profile"), InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="daily_bonus")],
         [InlineKeyboardButton(text="📂 Архив", callback_data="channels"), InlineKeyboardButton(text=vip_text, callback_data="free_channel")],
     ]
     if trial_used == 0:
@@ -217,10 +230,12 @@ async def get_admin_keyboard():
     ch2 = await get_setting('channel_2') or "Не задан"
     chat = await get_setting('chat_link') or "Не задан"
     prev = "✅ Есть" if await get_setting('preview_file_id') else "❌ Нет"
+    daily_val = await get_setting('daily_reward') or "1"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"), InlineKeyboardButton(text="📥 Бэкап (CSV)", callback_data="admin_backup")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="➕ Промокод", callback_data="admin_create_promo"), InlineKeyboardButton(text=f"🎬 Превью: {prev}", callback_data="admin_set_preview")],
+        [InlineKeyboardButton(text=f"🎁 Бонус за день: +{daily_val}", callback_data="admin_set_daily"), InlineKeyboardButton(text="➕ Промокод", callback_data="admin_create_promo")],
+        [InlineKeyboardButton(text=f"🎬 Превью: {prev}", callback_data="admin_set_preview")],
         [InlineKeyboardButton(text=f"⚙️ Канал 1: {ch1}", callback_data="admin_set_ch1")],
         [InlineKeyboardButton(text=f"⚙️ Канал 2: {ch2}", callback_data="admin_set_ch2")],
         [InlineKeyboardButton(text=f"💬 Чат: {chat}", callback_data="admin_set_chat")],
@@ -240,7 +255,7 @@ async def process_welcome_and_referral(user_id: int):
             ref_user = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", ref_id)
             reward, boost = 1, ""
             if ref_user and ref_user['joined_at']:
-                if is_2x_active(ref_user['joined_at'])[0]: reward, boost = 2, " (2X Бонус!)"
+                if is_2x_active(ref_user['joined_at'])[0]: reward, boost = 2, " (2X Турбо!)"
             await conn.execute("UPDATE users SET points = points + $1 WHERE user_id = $2", reward, ref_id)
             await conn.execute("UPDATE users SET referrer_id = NULL WHERE user_id = $1", user_id)
             try:
@@ -265,10 +280,11 @@ def build_welcome_text(first_name: str, user_row, got_welcome: bool = False) -> 
         f"• ⏱ <b>Тест-драйв</b> — 1 минута в VIP.\n"
         f"• 🎁 <b>Старт</b> — +{WELCOME_BONUS} балла сразу.\n"
         f"• 🔥 <b>Турбо 2X</b> — х2 балла в первый час.\n"
-        f"• 🎬 <b>Превью & Бонусы</b> — контент и коды.\n\n"
+        f"• 🎁 <b>Ежедневный бонус</b> — награда каждый день.\n\n"
         f"👇 <i>Выберите раздел:</i>"
     )
 
+# --- ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
@@ -321,7 +337,6 @@ async def profile_handler(callback: CallbackQuery):
     user_id = callback.from_user.id
     user = await get_user(user_id)
     points = user['points'] if user else 0
-    expire = user['expire_date'] if user else "Нет"
     trial = "✅ Доступен" if (user and user['trial_used'] == 0) else "❌ Использован"
     is_vip = False
     try:
@@ -350,7 +365,7 @@ async def content_preview_handler(callback: CallbackQuery):
             elif p_type == "video": await bot.send_video(callback.from_user.id, video=file_id, caption=caption, parse_mode=ParseMode.HTML, protect_content=True, reply_markup=kb)
             return
         except Exception: pass
-    await callback.message.answer("🔥 <b>Превью VIP-канала (18+)</b>\nТысячи эксклюзивных файлов без цензуры жду вас!", parse_mode=ParseMode.HTML, protect_content=True, reply_markup=kb)
+    await callback.message.answer("🔥 <b>Превью VIP-канала (18+)</b>\nТысячи эксклюзивных файлов без цензуры ждут вас!", parse_mode=ParseMode.HTML, protect_content=True, reply_markup=kb)
 
 @dp.callback_query(F.data == "delete_msg")
 async def delete_msg(c: CallbackQuery):
@@ -366,10 +381,14 @@ async def daily_bonus(c: CallbackQuery):
     if user and user['last_bonus'] == today:
         await c.answer("⏳ Бонус уже получен сегодня!", show_alert=True)
         return
+    
+    # Админкадан созланган кунлик бонус миқдорини оламиз
+    reward_val = int(await get_setting("daily_reward") or "1")
+
     if db_pool:
         async with db_pool.acquire() as conn:
-            await conn.execute("UPDATE users SET points = points + 1, last_bonus = $1 WHERE user_id = $2", today, uid)
-    await c.answer("🎉 Получен ежедневный бонус: +1 балл ⭐", show_alert=True)
+            await conn.execute("UPDATE users SET points = points + $1, last_bonus = $2 WHERE user_id = $3", reward_val, today, uid)
+    await c.answer(f"🎉 Получен ежедневный бонус: +{reward_val} балл ⭐", show_alert=True)
     user = await get_user(uid)
     await c.message.edit_text(build_welcome_text(html.escape(c.from_user.first_name), user, False), reply_markup=await get_main_keyboard(uid), parse_mode=ParseMode.HTML)
 
@@ -415,7 +434,7 @@ async def free_channel(c: CallbackQuery):
     await c.answer()
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={uid}"
-    share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote('🔥 Заходи!')}"
+    share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote('🔥 Заходи в VIP-архив!')}"
     user = await get_user(uid)
     points = user['points'] if user else 0
     expire_str = user['expire_date'] if user else None
@@ -494,7 +513,7 @@ async def join_req(req: ChatJoinRequest):
 @dp.callback_query(F.data == "help")
 async def help_h(c: CallbackQuery):
     await c.answer()
-    await c.message.edit_text("📖 <b>Справка Nexus</b>\nИспользуйте меню для получения доступа.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]]), parse_mode=ParseMode.HTML)
+    await c.message.edit_text("📖 <b>Справка Nexus</b>\nИспользуйте меню для навигации.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]]), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "back_main")
 async def back_main(c: CallbackQuery, state: FSMContext):
@@ -504,10 +523,11 @@ async def back_main(c: CallbackQuery, state: FSMContext):
     user = await get_user(uid)
     await c.message.edit_text(build_welcome_text(html.escape(c.from_user.first_name), user, False), reply_markup=await get_main_keyboard(uid), parse_mode=ParseMode.HTML)
 
+# --- АДМИН ПАНЕЛЬ ---
 @dp.message(Command("admin"))
 async def admin_start(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
-    await m.answer("👑 Админ-панель", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await m.answer("👑 Панель администратора", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(c: CallbackQuery):
@@ -529,7 +549,25 @@ async def admin_backup(c: CallbackQuery):
     for r in rows:
         lines.append(f"{r['user_id']},{r['referrer_id'] or ''},{r['points']},{r['trial_used']},{r['expire_date'] or ''},{r['joined_at'] or ''}")
     file = BufferedInputFile("\n".join(lines).encode("utf-8"), filename="backup.csv")
-    await bot.send_document(ADMIN_ID, document=file, caption="📥 Бэкап базы")
+    await bot.send_document(ADMIN_ID, document=file, caption="📥 Бэкап базы данных")
+
+@dp.callback_query(F.data == "admin_set_daily")
+async def set_daily_start(c: CallbackQuery, state: FSMContext):
+    if c.from_user.id != ADMIN_ID: return
+    await c.answer()
+    await state.set_state(AdminStates.waiting_for_daily_reward)
+    await c.message.edit_text("✏️ Отправьте новое количество баллов для ежедневного бонуса (например: <code>2</code>):", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]]))
+
+@dp.message(AdminStates.waiting_for_daily_reward)
+async def set_daily_save(m: types.Message, state: FSMContext):
+    if m.from_user.id != ADMIN_ID: return
+    await state.clear()
+    val = m.text.strip()
+    if not val.isdigit():
+        await m.answer("❌ Ошибка! Введите целое число (например: <code>1</code> или <code>2</code>).", reply_markup=await get_admin_keyboard())
+        return
+    await set_setting("daily_reward", val)
+    await m.answer(f"✅ Награда за ежедневный бонус успешно изменена на: <b>+{val} балл(а)</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_set_preview")
 async def set_prev(c: CallbackQuery, state: FSMContext):
