@@ -67,7 +67,7 @@ async def init_db_pool():
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('chat_link', '') ON CONFLICT (key) DO NOTHING")
-            logging.info("Ma'lumotlar bazasi asyncpg orqali muvaffaqiyatli ishga tushdi!")
+            logging.info("Ma'lumotlar bazasi muvaffaqiyatli ishga tushdi!")
         except Exception as e:
             logging.error(f"Baza ulanishida xatolik: {e}")
 
@@ -126,7 +126,6 @@ async def get_all_users():
 async def check_subscription(user_id: int) -> bool:
     ch1 = await get_setting('channel_1')
     ch2 = await get_setting('channel_2')
-    
     channels_to_check = [c for c in [ch1, ch2] if c and c.strip()]
     
     for ch in channels_to_check:
@@ -134,21 +133,20 @@ async def check_subscription(user_id: int) -> bool:
             member = await bot.get_chat_member(chat_id=ch, user_id=user_id)
             if member.status not in ["creator", "administrator", "member"]:
                 return False
-        except Exception as e:
-            logging.error(f"Obunani tekshirishda xatolik ({ch}): {e}")
+        except Exception:
             return False
     return True
 
+# --- PREMIUM UI KEYBOARDS ---
 async def get_main_keyboard():
     keyboard = [
-        [InlineKeyboardButton(text="📁 Каналы", callback_data="channels")],
-        [InlineKeyboardButton(text="⚡ Бесплатный канал", callback_data="free_channel")],
-        [InlineKeyboardButton(text="🤖 Помощник", callback_data="help")],
-        [InlineKeyboardButton(text="📝 Написать администратору", url=f"https://t.me/{ADMIN_USERNAME}")]
+        [InlineKeyboardButton(text="💎 Личный кабинет", callback_data="profile")],
+        [InlineKeyboardButton(text="📁 Премиум Архив", callback_data="channels"), InlineKeyboardButton(text="⚡ VIP Доступ", callback_data="free_channel")],
+        [InlineKeyboardButton(text="📖 Справка", callback_data="help"), InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{ADMIN_USERNAME}")]
     ]
     chat_url = await get_setting('chat_link')
     if chat_url and chat_url.strip():
-        keyboard.append([InlineKeyboardButton(text="💬 Чат", url=chat_url)])
+        keyboard.append([InlineKeyboardButton(text="👥 Сообщество / Чат", url=chat_url)])
         
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -158,50 +156,49 @@ async def get_sub_keyboard():
     
     buttons = []
     if ch1 and ch1.strip():
-        clean1 = ch1.replace("@", "")
-        buttons.append([InlineKeyboardButton(text="📢 Канал 1", url=f"https://t.me/{clean1}")])
+        buttons.append([InlineKeyboardButton(text=f"📌 Подписаться на {ch1}", url=f"https://t.me/{ch1.replace('@', '')}")])
     if ch2 and ch2.strip():
-        clean2 = ch2.replace("@", "")
-        buttons.append([InlineKeyboardButton(text="📢 Канал 2", url=f"https://t.me/{clean2}")])
+        buttons.append([InlineKeyboardButton(text=f"📌 Подписаться на {ch2}", url=f"https://t.me/{ch2.replace('@', '')}")])
         
     buttons.append([InlineKeyboardButton(text="🔄 Проверить подписку", callback_data="check_sub")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 async def get_admin_keyboard():
-    ch1 = await get_setting('channel_1') or "Sozlanmagan"
-    ch2 = await get_setting('channel_2') or "Sozlanmagan"
-    chat = await get_setting('chat_link') or "Sozlanmagan"
+    ch1 = await get_setting('channel_1') or "Не задан"
+    ch2 = await get_setting('channel_2') or "Не задан"
+    chat = await get_setting('chat_link') or "Не задан"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
-            [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
+            [InlineKeyboardButton(text="📊 Аналитика бота", callback_data="admin_stats")],
+            [InlineKeyboardButton(text="📢 Массовая рассылка", callback_data="admin_broadcast")],
             [InlineKeyboardButton(text=f"⚙️ Канал 1: {ch1}", callback_data="admin_set_ch1")],
             [InlineKeyboardButton(text=f"⚙️ Канал 2: {ch2}", callback_data="admin_set_ch2")],
-            [InlineKeyboardButton(text=f"💬 Чат linki: {chat}", callback_data="admin_set_chat")],
-            [InlineKeyboardButton(text="❌ Закрыть", callback_data="admin_close")]
+            [InlineKeyboardButton(text=f"💬 Чат: {chat}", callback_data="admin_set_chat")],
+            [InlineKeyboardButton(text="❌ Закрыть панель", callback_data="admin_close")]
         ]
     )
 
-# --- USER HANDLERS ---
+# --- HANDLERS ---
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
     args = command.args
     
-    referrer_id = None
-    if args and args.isdigit():
-        ref_candidate = int(args)
-        if ref_candidate != user_id:
-            referrer_id = ref_candidate
-
-    user = await get_user(user_id)
-    if not user:
+    referrer_id = int(args) if args and args.isdigit() and int(args) != user_id else None
+    
+    if not await get_user(user_id):
         await add_user(user_id, referrer_id)
     
-    is_sub = await check_subscription(user_id)
-    if not is_sub:
-        sub_text = "⚠️ <b>Для использования бота необходимо подписаться на наши каналы!</b>\n\nПосле подписки нажмите кнопку «Проверить подписку»."
+    if not await check_subscription(user_id):
+        sub_text = (
+            "🔐 <b>Требуется верификация подписки</b>\n"
+            "┌────────────────────────\n"
+            "│ Для доступа к закрытой экосистеме\n"
+            "│ необходимо подписаться на спонсорские каналы.\n"
+            "└────────────────────────\n\n"
+            "👇 <i>Выполните подписку и нажмите кнопку проверки:</i>"
+        )
         try:
             await message.answer(sub_text, reply_markup=await get_sub_keyboard(), parse_mode=ParseMode.HTML)
         except TelegramForbiddenError:
@@ -209,7 +206,15 @@ async def start_handler(message: types.Message, command: CommandObject):
         return
 
     first_name = html.escape(message.from_user.first_name)
-    welcome_text = f"💥 <b>Добро пожаловать, {first_name}!</b>\n‹━━━━━━━━━━━━━━━━━━›\n\n🔥 Приватный архив 18+\n— эксклюзивный контент\n— доступ только для участников\n\n👇 <b>Выбери раздел</b> 👇"
+    welcome_text = (
+        f"🌌 <b>Добро пожаловать в Nexus Hub, {first_name}</b>\n"
+        f"┌────────────────────────\n"
+        f"│ ⚡ Статус: <code>Авторизован</code>\n"
+        f"│ 📂 Доступ: <code>Активен</code>\n"
+        f"└────────────────────────\n\n"
+        f"💎 Эксклюзивные материалы, закрытые архивы и регулярные обновления уже жутдут вас в системе.\n\n"
+        f"👇 <i>Выберите нужный инструмент в меню:</i>"
+    )
     try:
         await message.answer(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
     except TelegramForbiddenError:
@@ -219,19 +224,18 @@ async def start_handler(message: types.Message, command: CommandObject):
 async def check_sub_callback(callback: CallbackQuery):
     await callback.answer()
     user_id = callback.from_user.id
-    is_sub = await check_subscription(user_id)
     
-    if is_sub:
+    if await check_subscription(user_id):
         user = await get_user(user_id)
         if user and user['referrer_id']:
             await add_point(user['referrer_id'])
             try:
                 await bot.send_message(
                     user['referrer_id'], 
-                    "🎉 Пользователь, которого вы пригласили, подписался на канал! Вам начислен <b>+1 балл</b>.",
+                    "🎉 <b>Реферальное уведомление:</b>\nВаш партнер успешно верифицирован в системе. Баланс пополнен на <b>+1 балл</b> ⭐",
                     parse_mode=ParseMode.HTML
                 )
-            except (TelegramForbiddenError, Exception):
+            except Exception:
                 pass
             
             if db_pool:
@@ -244,80 +248,118 @@ async def check_sub_callback(callback: CallbackQuery):
             pass
             
         first_name = html.escape(callback.from_user.first_name)
-        welcome_text = f"💥 <b>Добро пожаловать, {first_name}!</b>\n‹━━━━━━━━━━━━━━›\n\n🔥 Приватный архив 18+\n— эксклюзивный контент\n— доступ только для участников\n\n👇 <b>Выбери раздел</b> 👇"
-        try:
-            await callback.message.answer(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
-        except TelegramForbiddenError:
-            pass
+        welcome_text = (
+            f"🌌 <b>Добро пожаловать в Nexus Hub, {first_name}</b>\n"
+            f"┌────────────────────────\n"
+            f"│ ⚡ Статус: <code>Авторизован</code>\n"
+            f"│ 📂 Доступ: <code>Активен</code>\n"
+            f"└────────────────────────\n\n"
+            f"💎 Эксклюзивные материалы, закрытые архивы и регулярные обновления уже ждут вас в системе.\n\n"
+            f"👇 <i>Выберите нужный инструмент в меню:</i>"
+        )
+        await callback.message.answer(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
     else:
-        await callback.answer("❌ Вы еще не подписались на все каналы!", show_alert=True)
+        await callback.answer("⚠️ Вы не выполнили все условия подписки!", show_alert=True)
+
+@dp.callback_query(F.data == "profile")
+async def profile_handler(callback: CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    user = await get_user(user_id)
+    
+    points = user['points'] if user else 0
+    expire_str = user['expire_date'] if user else "Не активна"
+    
+    is_in_private = False
+    try:
+        member = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
+        if member.status in ["creator", "administrator", "member"]:
+            is_in_private = True
+    except Exception:
+        pass
+
+    status_badge = "🟢 Активен" if is_in_private else "🔴 Неактивен"
+
+    profile_text = (
+        f"🪪 <b>Ваш персональный профиль</b>\n"
+        f"┌────────────────────────\n"
+        f"👤 ID: <code>{user_id}</code>\n"
+        f"⭐ Баланс баллов: <b>{points} / {REQUIRED_REFERRALS}</b>\n"
+        f"🔐 Доступ в VIP: <b>{status_badge}</b>\n"
+        f"⏳ Срок действия: <code>{expire_str if is_in_private else 'Отсутствует'}</code>\n"
+        f"└────────────────────────"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Вернуться в меню", callback_data="back_main")]])
+    await callback.message.edit_text(profile_text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "channels")
 async def channels_handler(callback: CallbackQuery):
     await callback.answer()
-    is_sub = await check_subscription(callback.from_user.id)
-    if not is_sub:
-        await callback.answer("⚠️ Сначала подпишитесь на все обязательные каналы!", show_alert=True)
+    if not await check_subscription(callback.from_user.id):
+        await callback.answer("⚠️ Требуется подписка!", show_alert=True)
         return
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Перейти в канал", url=CHANNELS_SECTION_LINK)],
-            [InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]
+            [InlineKeyboardButton(text="🚀 Открыть архивный канал", url=CHANNELS_SECTION_LINK)],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]
         ]
     )
-    try:
-        await callback.message.edit_text("👇 Вы можете перейти в наш приватный канал по кнопке ниже:", reply_markup=kb)
-    except TelegramBadRequest:
-        pass
+    await callback.message.edit_text(
+        "📂 <b>Премиум Архив Каналов</b>\n"
+        "┌────────────────────────\n"
+        "│ Все медиафайлы, подборки и каталоги\n"
+        "│ структурированы в защищенном канале.\n"
+        "└────────────────────────\n\n"
+        "👇 <i>Нажмите для перехода:</i>",
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
 
 @dp.callback_query(F.data == "free_channel")
 async def free_channel_handler(callback: CallbackQuery):
     await callback.answer()
     user_id = callback.from_user.id
-    is_sub = await check_subscription(user_id)
-    if not is_sub:
-        await callback.answer("⚠️ Сначала подпишитесь на все обязательные каналы!", show_alert=True)
+    if not await check_subscription(user_id):
+        await callback.answer("⚠️ Сначала подпишитесь на каналы!", show_alert=True)
         return
 
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
-    
     user = await get_user(user_id)
     points = user['points'] if user else 0
     expire_str = user['expire_date'] if user else None
 
-    is_in_private_channel = False
+    is_in_private = False
     try:
         member = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
         if member.status in ["creator", "administrator", "member"]:
-            is_in_private_channel = True
+            is_in_private = True
     except Exception:
-        is_in_private_channel = False
+        pass
+
+    # Progress bar yaratish
+    filled = min(points, REQUIRED_REFERRALS)
+    empty = REQUIRED_REFERRALS - filled
+    progress_bar = "▰" * filled + "▱" * empty
 
     text = (
-        f"⚡ <b>Бесплатный канал (Реферальная система)</b>\n\n"
-        f"Приглашайте друзей и накапливайте баллы, чтобы получить доступ к закрытому каналу!\n"
-        f"💡 <i>За каждого приглашенного друга, подписавшегося на канал, вы получаете +1 балл.</i>\n\n"
-        f"👤 Ваши баллы: <b>{points} / {REQUIRED_REFERRALS}</b>\n"
-        f"🔗 Ваша пригласительная ссылка:\n<code>{ref_link}</code>\n\n"
+        f"⚡ <b>VIP Доступ по реферальной системе</b>\n"
+        f"┌────────────────────────\n"
+        f"│ Приглашайте пользователей по ссылке,\n"
+        f"│ собирайте баллы и активируйте доступ.\n"
+        f"└────────────────────────\n\n"
+        f"📊 Прогресс: [{progress_bar}] <b>{points}/{REQUIRED_REFERRALS}</b>\n\n"
+        f"🔗 <b>Ваша персональная ссылка:</b>\n"
+        f"<code>{ref_link}</code>\n\n"
     )
+    kb_back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]])
 
-    kb_back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]])
-
-    if is_in_private_channel and expire_str:
+    if is_in_private and expire_str:
         try:
-            exp_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
-            if datetime.now() < exp_dt:
-                text += (
-                    f"✅ <b>Вы уже состоите в закрытом канале!</b>\n\n"
-                    f"⏳ Срок действия вашего текущего доступа: до <b>{expire_str}</b>.\n"
-                    f"По истечении этого времени вы сможете активировать доступ снова."
-                )
-                try:
-                    await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
-                except TelegramBadRequest:
-                    pass
+            if datetime.now() < datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S"):
+                text += f"🟢 <b>Статус:</b> VIP доступ активен до <b>{expire_str}</b>"
+                await callback.message.edit_text(text, reply_markup=kb_back, parse_mode=ParseMode.HTML)
                 return
         except Exception:
             pass
@@ -331,243 +373,145 @@ async def free_channel_handler(callback: CallbackQuery):
                 await conn.execute("UPDATE users SET expire_date = $1 WHERE user_id = $2", expire_date_str, user_id)
 
         try:
-            expire_time = datetime.now() + timedelta(minutes=10)
             invite_link = await bot.create_chat_invite_link(
                 chat_id=PRIVATE_CHANNEL_ID,
                 member_limit=1,
-                expire_date=expire_time
+                expire_date=datetime.now() + timedelta(minutes=10)
             )
-
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="🔓 Войти в канал (Временная ссылка)", url=invite_link.invite_link)],
-                    [InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]
-                ]
-            )
-            text += (
-                f"🎉 <b>Вы успешно собрали 10 баллов!</b>\n\n"
-                f"⚠️ <b>ВНИМАНИЕ:</b> Вам предоставляется доступ к закрытому каналу ровно на <b>{SUB_DAYS} дней</b>!\n"
-                f"⏳ Срок действия доступа: до <b>{expire_date_str}</b>.\n"
-                f"По истечении {SUB_DAYS} дней система автоматически исключит вас из канала.\n\n"
-                f"<i>Ссылка ниже одноразовая и действительна в течение 10 минут только для 1 человека!</i>"
-            )
-        except Exception as e:
-            logging.error(f"Ssilka yaratishda xato: {e}")
-            text += "⚠️ Произошла ошибка при создании ссылки. Убедитесь, что бот является администратором закрытого канала с правом приглашения пользователей."
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔓 Войти в закрытый канал", url=invite_link.invite_link)],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]
+            ])
+            text += f"🎉 <b>Цель достигнута!</b> Вам открыт доступ на <b>{SUB_DAYS} дней</b> (до {expire_date_str})."
+        except Exception:
+            text += "⚠️ Ошибка генерации ссылки. Обратитесь к администратору."
             kb = kb_back
     else:
-        text += f"💡 Для получения доступа вам осталось набрать ещё <b>{REQUIRED_REFERRALS - points}</b> баллов."
+        needed = REQUIRED_REFERRALS - points
+        text += f"💡 Осталось пригласить: <b>{needed} пользователей</b>."
         kb = kb_back
 
-    try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
-    except TelegramBadRequest:
-        pass
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "help")
 async def help_handler(callback: CallbackQuery):
     await callback.answer()
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="👈 Назад", callback_data="back_main")]
-        ]
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]])
+    help_text = (
+        "📖 <b>Справочный центр бота</b>\n"
+        "┌────────────────────────\n"
+        "│ • <b>Архив</b> — каталог всех доступных ресурсов.\n"
+        "│ • <b>VIP Доступ</b> — бесплатное получение подписки через инвайты.\n"
+        "└────────────────────────\n\n"
+        "💬 Возникли проблемы? Напишите нашему администратору через главное меню."
     )
-    help_text = "🤖 <b>Помощник / Информация</b>\n\n1. <b>Каналы</b> — Список наших основных ресурсов.\n2. <b>Бесплатный канал</b> — Приглашайте друзей по своей ссылке, копите баллы и получайте бесплатный доступ к закрытому каналу!\n\nЕсли у вас возникли вопросы, свяжитесь с администратором."
-    try:
-        await callback.message.edit_text(help_text, reply_markup=kb, parse_mode=ParseMode.HTML)
-    except TelegramBadRequest:
-        pass
+    await callback.message.edit_text(help_text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "back_main")
 async def back_main_handler(callback: CallbackQuery):
     await callback.answer()
     first_name = html.escape(callback.from_user.first_name)
-    welcome_text = f"💥 <b>Добро пожаловать, {first_name}!</b>\n‹━━━━━━━━━━━━━━━━›\n\n🔥 Приватный архив 18+\n— эксклюзивный контент\n— доступ только для участников\n\n👇 <b>Выбери раздел</b> 👇"
-    try:
-        await callback.message.edit_text(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
-    except TelegramBadRequest:
-        pass
+    welcome_text = (
+        f"🌌 <b>Добро пожаловать в Nexus Hub, {first_name}</b>\n"
+        f"┌────────────────────────\n"
+        f"│ ⚡ Статус: <code>Авторизован</code>\n"
+        f"│ 📂 Доступ: <code>Активен</code>\n"
+        f"└────────────────────────\n\n"
+        f"💎 Эксклюзивные материалы, закрытые архивы и регулярные обновления уже ждут вас в системе.\n\n"
+        f"👇 <i>Выберите нужный инструмент в меню:</i>"
+    )
+    await callback.message.edit_text(welcome_text, reply_markup=await get_main_keyboard(), parse_mode=ParseMode.HTML)
 
 # ==================== ADMIN PANEL ====================
 @dp.message(Command("admin"))
 async def admin_start(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await message.answer("👑 <b>Панель администратора (Nexus Control)</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats_handler(callback: CallbackQuery):
     await callback.answer()
     if callback.from_user.id != ADMIN_ID:
         return
-        
-    await callback.answer("⏳ Подсчет активных пользователей...", show_alert=False)
+    await callback.answer("⏳ Сканирование базы данных...", show_alert=False)
     
     total_users, total_points = await get_stats()
     users = await get_all_users()
-
-    semaphore = asyncio.Semaphore(30)
-
-    async def check_user(uid):
-        async with semaphore:
-            try:
-                await bot.send_chat_action(chat_id=uid, action="typing")
-                return True
-            except Exception:
-                return False
-
-    results = await asyncio.gather(*[check_user(uid) for uid in users])
-    
-    active_users = sum(1 for r in results if r)
-    blocked_users = total_users - active_users
+    active = 0
+    for uid in users:
+        try:
+            await bot.send_chat_action(chat_id=uid, action="typing")
+            active += 1
+        except Exception:
+            pass
 
     text = (
-        f"📊 <b>Статистика бота:</b>\n\n"
+        f"📊 <b>Аналитический отчет:</b>\n"
+        f"┌────────────────────────\n"
         f"👤 Всего пользователей: <b>{total_users}</b>\n"
-        f"🟢 Активных пользователей: <b>{active_users}</b>\n"
-        f"🔴 Заблокировали бота: <b>{blocked_users}</b>\n"
-        f"⭐ Всего набрано баллов: <b>{total_points}</b>"
+        f"🟢 Активных в сети: <b>{active}</b>\n"
+        f"🔴 Заблокировали бота: <b>{total_users - active}</b>\n"
+        f"⭐ Суммарно баллов: <b>{total_points}</b>\n"
+        f"└────────────────────────"
     )
-    try:
-        await callback.message.edit_text(text, reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-    except TelegramBadRequest:
-        pass
+    await callback.message.edit_text(text, reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_set_ch1")
 async def admin_set_ch1(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
     if callback.from_user.id != ADMIN_ID:
         return
     await state.set_state(AdminStates.waiting_for_ch1)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]])
-    await callback.message.edit_text("✏️ Отправьте username первого обязательного канала (например: <code>@mychannel</code>):", reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.message.edit_text("✏️ Отправьте юзернейм 1-го канала (например: <code>@channel</code>):", reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @dp.message(AdminStates.waiting_for_ch1)
 async def process_ch1(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-    channel_username = message.text.strip()
-    if not channel_username.startswith("@"):
-        channel_username = "@" + channel_username
-    await set_setting("channel_1", channel_username)
+    ch = message.text.strip()
+    if not ch.startswith("@"): ch = "@" + ch
+    await set_setting("channel_1", ch)
     await state.clear()
-    await message.answer(f"✅ Канал 1 успешно обновлен: <b>{channel_username}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_set_ch2")
-async def admin_set_ch2(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await state.set_state(AdminStates.waiting_for_ch2)
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 Удалить 2-канал", callback_data="admin_remove_ch2")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]
-        ]
-    )
-    await callback.message.edit_text("✏️ Отправьте username второго обязательного канала (например: <code>@mychannel2</code>) или нажмите «Удалить»:", reply_markup=kb, parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_remove_ch2")
-async def admin_remove_ch2(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await set_setting("channel_2", "")
-    await state.clear()
-    await callback.message.edit_text("✅ Второй обязательный канал успешно удален!", reply_markup=await get_admin_keyboard())
-
-@dp.message(AdminStates.waiting_for_ch2)
-async def process_ch2(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    channel_username = message.text.strip()
-    if not channel_username.startswith("@"):
-        channel_username = "@" + channel_username
-    await set_setting("channel_2", channel_username)
-    await state.clear()
-    await message.answer(f"✅ Канал 2 успешно добавлен/обновлен: <b>{channel_username}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_set_chat")
-async def admin_set_chat(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await state.set_state(AdminStates.waiting_for_chat)
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 Удалить ссылку на чат", callback_data="admin_remove_chat")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]
-        ]
-    )
-    await callback.message.edit_text("✏️ Chat guruhining to'liq havolasini yuboring (masalan: <code>https://t.me/chat_link</code>) yoki o'chirish tugmasini bosing:", reply_markup=kb, parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_remove_chat")
-async def admin_remove_chat(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    if callback.from_user.id != ADMIN_ID:
-        return
-    await set_setting("chat_link", "")
-    await state.clear()
-    await callback.message.edit_text("✅ Chat havolasi muvaffaqiyatli o'chirildi!", reply_markup=await get_admin_keyboard())
-
-@dp.message(AdminStates.waiting_for_chat)
-async def process_chat(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    chat_url = message.text.strip()
-    await set_setting("chat_link", chat_url)
-    await state.clear()
-    await message.answer(f"✅ Chat linki muvaffaqiyatli saqlandi: <b>{chat_url}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
-
-@dp.callback_query(F.data == "admin_cancel_settings")
-async def admin_cancel_settings(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.clear()
-    await callback.message.edit_text("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+    await message.answer(f"✅ Канал 1 изменен на: <b>{ch}</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_handler(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
     if callback.from_user.id != ADMIN_ID:
         return
     await state.set_state(AdminStates.waiting_for_broadcast)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]])
-    await callback.message.edit_text("📢 Отправьте сообщение, которое будет разослано всем пользователям:", reply_markup=kb)
+    await callback.message.edit_text("📢 Отправьте пост для массовой рассылки:", reply_markup=kb)
 
 @dp.message(AdminStates.waiting_for_broadcast)
 async def process_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     await state.clear()
-    
     users = await get_all_users()
-    await message.answer(f"⏳ Начинаем рассылку для {len(users)} пользователей...")
+    await message.answer(f"⏳ Рассылка запущена для {len(users)} пользователей...")
     
-    success = 0
-    failed = 0
-    
+    success, failed = 0, 0
     for uid in users:
         try:
             await message.copy_to(chat_id=uid)
             success += 1
-            await asyncio.sleep(0.05)
-        except (TelegramForbiddenError, TelegramAPIError, Exception):
+            await asyncio.sleep(0.04)
+        except Exception:
             failed += 1
             
-    await message.answer(
-        f"✅ <b>Рассылка завершена!</b>\n\n"
-        f"🎉 Успешно отправлено: <b>{success}</b>\n"
-        f"❌ Не доставлено: <b>{failed}</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=await get_admin_keyboard()
-    )
+    await message.answer(f"✅ <b>Рассылка завершена!</b>\n\n🎉 Успешно: {success}\n❌ Ошибок: {failed}", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "admin_cancel_settings")
+async def cancel_settings(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("👑 <b>Панель администратора</b>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "admin_close")
-async def admin_close_handler(callback: CallbackQuery):
-    await callback.answer()
+async def admin_close(callback: CallbackQuery):
     await callback.message.delete()
 
-# --- AVTOMATIK KANALO'DAN CHIQARISH ---
+# --- BACKGROUND TASKS ---
 async def auto_kick_expired_users():
     while True:
         try:
@@ -578,9 +522,8 @@ async def auto_kick_expired_users():
 
                     for r in users:
                         u_id = r['user_id']
-                        expire_str = r['expire_date']
                         try:
-                            expire_dt = datetime.strptime(expire_str, "%Y-%m-%d %H:%M:%S")
+                            expire_dt = datetime.strptime(r['expire_date'], "%Y-%m-%d %H:%M:%S")
                             if now >= expire_dt:
                                 try:
                                     member = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
@@ -590,49 +533,33 @@ async def auto_kick_expired_users():
                                         try:
                                             await bot.send_message(
                                                 u_id,
-                                                f"⏰ <b>Срок вашей бесплатной подписки ({SUB_DAYS} дней) истек!</b>\n\n"
-                                                f"Вы были автоматически исключены из закрытого канала. "
-                                                f"Чтобы войти снова, вам необходимо повторно набрать {REQUIRED_REFERRALS} баллов.",
+                                                "⏰ <b>Срок действия вашей подписки истек!</b>\nВы были автоматически исключены из закрытого канала.",
                                                 parse_mode=ParseMode.HTML
                                             )
-                                        except (TelegramForbiddenError, Exception):
+                                        except Exception:
                                             pass
-                                        logging.info(f"Foydalanuvchi {u_id} kanaldan chiqarildi.")
-                                except Exception as e:
-                                    logging.error(f"Kanal a'zosini kick qilishda xato ({u_id}): {e}")
-
+                                except Exception:
+                                    pass
                                 await conn.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = $1", u_id)
-                        except Exception as ex:
-                            logging.error(f"Sana parse qilishda xato: {ex}")
-        except Exception as e:
-            logging.error(f"Xatolik auto_kick_expired_users: {e}")
-
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         await asyncio.sleep(60)
 
-# --- WEBHOOK ISHGA TUSHMASI ---
 async def on_startup(app):
     await init_db_pool()
     asyncio.create_task(auto_kick_expired_users())
     if RENDER_EXTERNAL_URL:
         webhook_url = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
         await bot.set_webhook(webhook_url, drop_pending_updates=True)
-        logging.info(f"Webhook o'rnatildi: {webhook_url}")
-    else:
-        logging.warning("RENDER_EXTERNAL_URL topilmadi. Webhook o'rnatilmadi.")
 
 def main():
     app = web.Application()
-    
-    async def health_check(request):
-        return web.Response(text="Bot ishlayapti!", status=200)
+    app.router.add_get("/", lambda req: web.Response(text="Nexus Bot Active", status=200))
 
-    app.router.add_get("/", health_check)
-
-    webhook_requests_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot,
-    )
-    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler.register(app, path=WEBHOOK_PATH)
 
     setup_application(app, dp, bot=bot)
     app.on_startup.append(on_startup)
