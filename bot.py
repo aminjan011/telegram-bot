@@ -23,7 +23,7 @@ from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
-# ==================== SOZLAMALAR (SETTINGS) ====================
+# ==================== СОЗЛАМА (SETTINGS) ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8932013152:AAFbV_8mNECLC8Ctk7rkcKCg3Od60CUpZ8o")
 PRIVATE_CHANNEL_ID = -1004324882879
 CHANNELS_SECTION_LINK = "https://t.me/+j2RWAdcz2FwwMGVi"
@@ -55,7 +55,7 @@ class AdminStates(StatesGroup):
     waiting_for_preview = State()
     waiting_for_daily_reward = State()
 
-# --- BAZA DАННЫХ (FLOAT qo'llab-quvvatlashi bilan) ---
+# --- БАЗА ДАННЫХ ---
 db_pool: asyncpg.Pool = None
 
 async def init_db_pool():
@@ -78,7 +78,6 @@ async def init_db_pool():
                         trial_used INT DEFAULT 0
                     )
                 ''')
-                # Agar oldingi baza INT bo'lsa, uni REAL (kasr son) ga o'zgartiramiz
                 await conn.execute("ALTER TABLE users ALTER COLUMN points TYPE REAL USING points::REAL")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bonus TEXT")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS warned_expire INT DEFAULT 0")
@@ -105,9 +104,9 @@ async def init_db_pool():
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_type', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_caption', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('daily_reward', '1') ON CONFLICT (key) DO NOTHING")
-            logging.info("Ma'lumotlar bazasi muvaffaqiyatli ishga tushdi!")
+            logging.info("База данных успешно инициализирована!")
         except Exception as e:
-            logging.error(f"Xatolik: {e}")
+            logging.error(f"Ошибка БД: {e}")
 
 async def get_setting(key: str) -> str:
     if not db_pool: return ""
@@ -184,38 +183,39 @@ async def kick_after_trial(user_id: int, delay: int = TRIAL_SECONDS):
         
         bot_info = await bot.get_me()
         ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
-        share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote('🔥 Заходи в VIP-архив!')}"
+        share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote('🔥 Доступ к 1,500+ видео в VIP-архиве!')}"
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📤 Поделиться", url=share_url)],
-            [InlineKeyboardButton(text="⚡ VIP на 10 дней", callback_data="free_channel")]
+            [InlineKeyboardButton(text="📤 Поделиться с друзьями", url=share_url)],
+            [InlineKeyboardButton(text="⚡ Забрать VIP навсегда", callback_data="free_channel")]
         ])
-        await bot.send_message(user_id, "⏱ <b>Тест-драйв завершен!</b>\nХотите полный доступ к 1,500+ видео?", parse_mode=ParseMode.HTML, reply_markup=kb)
+        await bot.send_message(user_id, "⏳ <b>Время тест-драйва исчерпано!</b>\n\nЭмоции только начинаются... Хотите получить полный доступ ко всем <b>1,500+ видео</b> без цензуры?", parse_mode=ParseMode.HTML, reply_markup=kb)
     except Exception:
         pass
 
-# --- KLAVIATURALAR ---
+# --- ПРЕМИУМ КЛАВИАТУРЫ ---
 async def get_main_keyboard(user_id: int):
     user = await get_user(user_id)
     points = user['points'] if user else 0
     trial_used = user['trial_used'] if user else 0
-    vip_text = "🟢 Забрать VIP" if points >= REQUIRED_REFERRALS else "⚡ Получить VIP"
+    vip_text = "🟢 Забрать VIP Доступ" if points >= REQUIRED_REFERRALS else "⚡ Получить VIP Доступ"
 
     kb = [
-        [InlineKeyboardButton(text="🪪 Профиль", callback_data="profile"), InlineKeyboardButton(text="🎁 Ежедневный бонус", callback_data="daily_bonus")],
-        [InlineKeyboardButton(text="📂 Премиум Архив (1,500+ видео)", callback_data="channels"), InlineKeyboardButton(text=vip_text, callback_data="free_channel")],
+        [InlineKeyboardButton(text="🪪 Личный Кабинет", callback_data="profile"), InlineKeyboardButton(text="🎁 Ежедневный Бонус", callback_data="daily_bonus")],
+        [InlineKeyboardButton(text="🔥 PREMIUM ARCHIVE (1,500+ ВИДЕО)", callback_data="channels")],
+        [InlineKeyboardButton(text=vip_text, callback_data="free_channel")],
     ]
     if trial_used == 0:
-        kb.append([InlineKeyboardButton(text="⏱ Тест-драйв (1 мин)", callback_data="trial_access"), InlineKeyboardButton(text="🔥 Превью", callback_data="content_preview")])
+        kb.append([InlineKeyboardButton(text="⏱ Тест-драйв (1 мин)", callback_data="trial_access"), InlineKeyboardButton(text="🔞 Превью 18+", callback_data="content_preview")])
     else:
-        kb.append([InlineKeyboardButton(text="🔥 Превью контента", callback_data="content_preview")])
+        kb.append([InlineKeyboardButton(text="🔞 Превью контента 18+", callback_data="content_preview")])
 
     kb.extend([
         [InlineKeyboardButton(text="🔑 Промокод", callback_data="enter_promocode"), InlineKeyboardButton(text="📖 Справка", callback_data="help")],
-        [InlineKeyboardButton(text="💬 Поддержка", url=f"https://t.me/{ADMIN_USERNAME}")]
+        [InlineKeyboardButton(text="💬 Поддержка 24/7", url=f"https://t.me/{ADMIN_USERNAME}")]
     ])
     chat_url = await get_setting('chat_link')
     if chat_url and chat_url.strip():
-        kb.append([InlineKeyboardButton(text="👥 Чат", url=chat_url)])
+        kb.append([InlineKeyboardButton(text="👥 Закрытый Чат Клуба", url=chat_url)])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 async def get_sub_keyboard():
@@ -224,7 +224,7 @@ async def get_sub_keyboard():
     buttons = []
     if ch1 and ch1.strip(): buttons.append([InlineKeyboardButton(text=f"📢 Подписаться ➔ {ch1}", url=f"https://t.me/{ch1.replace('@', '')}")])
     if ch2 and ch2.strip(): buttons.append([InlineKeyboardButton(text=f"📢 Подписаться ➔ {ch2}", url=f"https://t.me/{ch2.replace('@', '')}")])
-    buttons.append([InlineKeyboardButton(text=f"✨ Проверить (+{WELCOME_BONUS} балла)", callback_data="check_sub")])
+    buttons.append([InlineKeyboardButton(text=f"✨ Проверить и забрать +{WELCOME_BONUS} балла", callback_data="check_sub")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 async def get_admin_keyboard():
@@ -257,11 +257,11 @@ async def process_welcome_and_referral(user_id: int):
             ref_user = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", ref_id)
             reward, boost = 1.0, ""
             if ref_user and ref_user['joined_at']:
-                if is_2x_active(ref_user['joined_at'])[0]: reward, boost = 2.0, " (2X Турбо!)"
+                if is_2x_active(ref_user['joined_at'])[0]: reward, boost = 2.0, " 🔥 (2X Турбо-бонус!)"
             await conn.execute("UPDATE users SET points = points + $1 WHERE user_id = $2", reward, ref_id)
             await conn.execute("UPDATE users SET referrer_id = NULL WHERE user_id = $1", user_id)
             try:
-                await bot.send_message(ref_id, f"🎉 <b>Реферал подписался!</b> +{reward} балл{boost}", parse_mode=ParseMode.HTML)
+                await bot.send_message(ref_id, f"🎉 <b>Успешное приглашение!</b>\nВам начислено: <b>+{reward} балл</b>{boost} ⭐", parse_mode=ParseMode.HTML)
             except Exception:
                 pass
     return got_wel
@@ -270,30 +270,44 @@ def build_welcome_text(first_name: str, user_row, got_welcome: bool = False) -> 
     boost_line = ""
     if user_row and user_row['joined_at']:
         act, mins = is_2x_active(user_row['joined_at'])
-        if act: boost_line = f"\n🔥 <b>2X Турбо-режим ({mins} мин):</b> х2 балла за друзей!\n"
-    gift = f"\n🎁 <b>Вам начислено: +{WELCOME_BONUS} балла!</b>\n" if got_welcome else ""
+        if act: boost_line = f"\n🔥 <b>ТУРБО-РЕЖИМ 2X АКТИВЕН ({mins} мин):</b> х2 балла за каждого друга!\n"
+    gift = f"\n🎁 <b>Вам начислен стартовый бонус: +{WELCOME_BONUS} балла!</b>\n" if got_welcome else ""
     return (
-        f"⚡ <b>Nexus Core, {first_name}</b>\n"
+        f"🌌 <b>Добро пожаловать в Nexus Core, {first_name}!</b>\n"
         f"┏━━━━━━━━━━━━━━━━━━━━━\n"
-        f"┃ 🛡 Статус: <code>Верифицирован</code>\n"
+        f"┃ 🛡 Статус: <code>VIP Верифицирован</code>\n"
+        f"┃ 💎 Доступ: <code>Эксклюзив 18+</code>\n"
         f"┗━━━━━━━━━━━━━━━━━━━━━"
         f"{gift}{boost_line}\n"
-        f"✨ <b>Возможности:</b>\n"
-        f"• 📂 <b>Премиум Архив</b> — 1,500+ эксклюзивных видео!\n"
-        f"• ⏱ <b>Тест-драйв</b> — 1 минута в VIP.\n"
-        f"• 🎁 <b>Старт & Ежедневно</b> — бонусные баллы.\n\n"
-        f"👇 <i>Выберите раздел:</i>"
+        f"🔥 <b>Что вас ждет внутри системы:</b>\n"
+        f"• 📂 <b>Премиум Архив</b> — более <b>1,500+ горячих видео</b> без цензуры!\n"
+        f"• ⏱ <b>Тест-драйв</b> — 1 минута полного погружения в VIP.\n"
+        f"• 🎁 <b>Награды</b> — ежедневные бонусы и секретные промокоды.\n\n"
+        f"👇 <i>Выберите нужный раздел в меню ниже:</i>"
     )
 
-# --- XENLERLAR ---
+# --- ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
     ref_id = int(command.args) if command.args and command.args.isdigit() and int(command.args) != user_id else None
     if not await get_user(user_id): await add_user(user_id, ref_id)
     if not await check_subscription(user_id):
-        await message.answer("🔐 Подпишитесь на каналы для доступа:", reply_markup=await get_sub_keyboard(), parse_mode=ParseMode.HTML)
+        sub_text = (
+            "🔐 <b>Система Безопасности & Доступ</b>\n"
+            "┏━━━━━━━━━━━━━━━━━━━━━\n"
+            "┃ ⚠️ Для входа в закрытую экосистему\n"
+            "┃ подпишитесь на наши каналы-партнеры.\n"
+            f"┃ 🎁 Бонус за подписку: <b>+{WELCOME_BONUS} балла сразу!</b>\n"
+            "┗━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "👇 <i>Подпишитесь и нажмите кнопку проверки:</i>"
+        )
+        try:
+            await message.answer(sub_text, reply_markup=await get_sub_keyboard(), parse_mode=ParseMode.HTML)
+        except TelegramForbiddenError:
+            pass
         return
+
     got_wel = await process_welcome_and_referral(user_id)
     user = await get_user(user_id)
     await message.answer(build_welcome_text(html.escape(message.from_user.first_name), user, got_wel), reply_markup=await get_main_keyboard(user_id), parse_mode=ParseMode.HTML)
@@ -303,34 +317,42 @@ async def check_sub_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
     if await check_subscription(user_id):
         got_wel = await process_welcome_and_referral(user_id)
-        await callback.answer("✅ Успешно верифицировано!", show_alert=True)
+        await callback.answer("✅ Верификация успешно пройдена!", show_alert=True)
         try: await callback.message.delete()
         except Exception: pass
         user = await get_user(user_id)
         await callback.message.answer(build_welcome_text(html.escape(callback.from_user.first_name), user, got_wel), reply_markup=await get_main_keyboard(user_id), parse_mode=ParseMode.HTML)
     else:
-        await callback.answer("⚠️ Вы подписались не на все каналы!", show_alert=True)
+        await callback.answer("⚠️ Вы подписались еще не на все каналы!", show_alert=True)
 
 @dp.callback_query(F.data == "trial_access")
 async def trial_access_handler(callback: CallbackQuery):
     user_id = callback.from_user.id
     if not await check_subscription(user_id):
-        await callback.answer("⚠️ Подпишитесь на каналы!", show_alert=True)
+        await callback.answer("⚠️ Сначала подпишитесь на каналы!", show_alert=True)
         return
     user = await get_user(user_id)
     if user and user['trial_used'] == 1:
-        await callback.answer("❌ Тест-драйв уже использован!", show_alert=True)
+        await callback.answer("❌ Вы уже использовали свой тест-драйв!", show_alert=True)
         return
     await callback.answer()
     try:
         link = await bot.create_chat_invite_link(chat_id=PRIVATE_CHANNEL_ID, creates_join_request=True, expire_date=datetime.now() + timedelta(minutes=10))
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Войти на 1 минуту", url=link.invite_link)],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]
+            [InlineKeyboardButton(text="🚀 Войти на 1 минуту (VIP)", url=link.invite_link)],
+            [InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]
         ])
-        await callback.message.edit_text("⏱ <b>Тест-драйв VIP-канала (60 секунд)</b>\nНажмите кнопку ниже, заявка одобрится автоматически:", reply_markup=kb, parse_mode=ParseMode.HTML)
+        text = (
+            "⏱ <b>Тест-драйв закрытого VIP-канала (60 секунд)</b>\n"
+            "┏━━━━━━━━━━━━━━━━━━━━━\n"
+            "┃ 🔓 Статус: <code>Пробный доступ 18+</code>\n"
+            "┃ ⏳ Таймер: <code>60 секунд пламени</code>\n"
+            "┗━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "⚠️ Нажмите кнопку ниже. Заявка будет одобрена <b>мгновенно</b>, и начнется отсчет времени вау-эффекта!"
+        )
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     except Exception:
-        await callback.message.edit_text("⚠️ Ошибка ссылки.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]]))
+        await callback.message.edit_text("⚠️ Ошибка генерации ссылки.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]]))
 
 @dp.callback_query(F.data == "profile")
 async def profile_handler(callback: CallbackQuery):
@@ -338,6 +360,7 @@ async def profile_handler(callback: CallbackQuery):
     user_id = callback.from_user.id
     user = await get_user(user_id)
     points = user['points'] if user else 0
+    pts_str = f"{int(points)}" if points.is_integer() else f"{points}"
     trial = "✅ Доступен" if (user and user['trial_used'] == 0) else "❌ Использован"
     is_vip = False
     try:
@@ -345,18 +368,26 @@ async def profile_handler(callback: CallbackQuery):
         if m.status in ["creator", "administrator", "member"]: is_vip = True
     except Exception: pass
 
-    text = f"🪪 <b>Профиль</b>\nID: <code>{user_id}</code>\n⭐ Баллы: <b>{points}/{REQUIRED_REFERRALS}</b>\n⏱ Тест-драйв: <b>{trial}</b>\n🔐 VIP: <b>{'🟢 Активен' if is_vip else '🔴 Неактивен'}</b>"
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]]), parse_mode=ParseMode.HTML)
+    text = (
+        f"🪪 <b>Персональный кабинет</b>\n"
+        f"┏━━━━━━━━━━━━━━━━━━━━━\n"
+        f"┃ 🆔 ID: <code>{user_id}</code>\n"
+        f"┃ ⭐ Баллы: <b>{pts_str}/{REQUIRED_REFERRALS}</b>\n"
+        f"┃ ⏱ Тест-драйв: <b>{trial}</b>\n"
+        f"┃ 🔐 VIP статус: <b>{'🟢 Активен (1,500+ видео)' if is_vip else '🔴 Неактивен'}</b>\n"
+        f"┗━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]]), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "content_preview")
 async def content_preview_handler(callback: CallbackQuery):
     if not await check_subscription(callback.from_user.id):
-        await callback.answer("⚠️ Нужна подписка!", show_alert=True)
+        await callback.answer("⚠️ Требуется подписка!", show_alert=True)
         return
     file_id, p_type = await get_setting("preview_file_id"), await get_setting("preview_type")
-    caption = await get_setting("preview_caption") or "🔥 <b>Превью VIP-канала! Внутри 1,500+ видео!</b>"
+    caption = await get_setting("preview_caption") or "🔥 <b>ЭКСКЛЮЗИВНОЕ ПРЕВЬЮ 18+</b>\nСамые горячие кадры из закрытой базы на 1,500+ видео!"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡ Получить VIP доступ", callback_data="free_channel")],
+        [InlineKeyboardButton(text="⚡ Получить полный доступ к 1,500+ видео", callback_data="free_channel")],
         [InlineKeyboardButton(text="🗑 Скрыть", callback_data="delete_msg")]
     ])
     await callback.answer()
@@ -366,7 +397,7 @@ async def content_preview_handler(callback: CallbackQuery):
             elif p_type == "video": await bot.send_video(callback.from_user.id, video=file_id, caption=caption, parse_mode=ParseMode.HTML, protect_content=True, reply_markup=kb)
             return
         except Exception: pass
-    await callback.message.answer("🔥 <b>Превью VIP-канала (18+)</b>\nКоллекция из <b>1,500+ эксклюзивных видео</b> ждет вас без цензуры!", parse_mode=ParseMode.HTML, protect_content=True, reply_markup=kb)
+    await callback.message.answer("🔥 <b>Превью VIP-архива (18+)</b>\nТысячи откровенных и элитных материалов без цензуры ждут вас прямо сейчас!", parse_mode=ParseMode.HTML, protect_content=True, reply_markup=kb)
 
 @dp.callback_query(F.data == "delete_msg")
 async def delete_msg(c: CallbackQuery):
@@ -380,17 +411,16 @@ async def daily_bonus(c: CallbackQuery):
     user = await get_user(uid)
     today = datetime.now().strftime("%Y-%m-%d")
     if user and user['last_bonus'] == today:
-        await c.answer("⏳ Бонус уже получен сегодня!", show_alert=True)
+        await c.answer("⏳ Вы уже забрали бонус сегодня! Ждем вас завтра.", show_alert=True)
         return
     
     reward_val = float(await get_setting("daily_reward") or "1")
-
     if db_pool:
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE users SET points = points + $1, last_bonus = $2 WHERE user_id = $3", reward_val, today, uid)
     
     rew_str = f"{int(reward_val)}" if reward_val.is_integer() else f"{reward_val}"
-    await c.answer(f"🎉 Получен ежедневный бонус: +{rew_str} балл ⭐", show_alert=True)
+    await c.answer(f"🎉 Ежедневный бонус зачислен: +{rew_str} балл ⭐", show_alert=True)
     user = await get_user(uid)
     await c.message.edit_text(build_welcome_text(html.escape(c.from_user.first_name), user, False), reply_markup=await get_main_keyboard(uid), parse_mode=ParseMode.HTML)
 
@@ -398,7 +428,7 @@ async def daily_bonus(c: CallbackQuery):
 async def enter_promo(c: CallbackQuery, state: FSMContext):
     await c.answer()
     await state.set_state(UserStates.waiting_for_promo)
-    await c.message.edit_text("🔑 Введите промокод:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Отмена", callback_data="back_main")]]))
+    await c.message.edit_text("🔑 <b>Активация промокода</b>\n\nОтправьте секретный код в чат:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]]), parse_mode=ParseMode.HTML)
 
 @dp.message(UserStates.waiting_for_promo)
 async def process_promo(message: types.Message, state: FSMContext):
@@ -412,31 +442,32 @@ async def process_promo(message: types.Message, state: FSMContext):
             await conn.execute("UPDATE users SET points = points + $1 WHERE user_id = $2", rew, uid)
             await conn.execute("DELETE FROM promocodes WHERE code = $1", code)
             rew_str = f"{int(rew)}" if rew.is_integer() else f"{rew}"
-            await message.answer(f"🎉 Промокод активирован! +{rew_str} баллов ⭐", reply_markup=await get_main_keyboard(uid), parse_mode=ParseMode.HTML)
+            await message.answer(f"🎉 <b>Промокод успешно активирован!</b>\nНачислено: <b>+{rew_str} баллов</b> ⭐", reply_markup=await get_main_keyboard(uid), parse_mode=ParseMode.HTML)
         else:
-            await message.answer("❌ Неверный или использованный код.", reply_markup=await get_main_keyboard(uid), parse_mode=ParseMode.HTML)
+            await message.answer("❌ <b>Ошибка:</b> Неверный или уже использованный промокод.", reply_markup=await get_main_keyboard(uid), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "channels")
 async def channels(c: CallbackQuery):
     if not await check_subscription(c.from_user.id):
-        await c.answer("⚠️ Нужна подписка!", show_alert=True)
+        await c.answer("⚠️ Требуется подписка на каналы!", show_alert=True)
         return
     await c.answer()
     
-    # Yangilangan, xaridorlarni o'ziga tortadigan ehtirosli va kuchli matn
+    # Сверх-эмоциональный, страстный и продающий текст для архива на русском языке
     archive_text = (
-        "🔥 <b>PREMIUM VIP-ARXIV: 1,500+ VIDEOSIZ CHEGARALAR!</b> 🔥\n\n"
-        "Siz qidirgan eng sara, olovli va yopiq kontentlar bazasi endi to'liq bir joyda jamlandi!\n\n"
-        "✨ <b>Nima uchun aynan bizning VIP kanal?</b>\n"
-        "• 🎬 <b>1,500 tadan ortiq eksklyuziv video</b> — har kuni tinimsiz yangi va qizg'in materiallar qo'shilib boradi.\n"
-        "• 💯 <b>Mutlaqo HD sifat</b> va zerikarli reklamasiz muhit.\n"
-        "• 🔞 Hech qayerda topilmaydigan maxfiy va shaxsiy bazalar!\n\n"
-        "💥 <i>Hozirning o'zida yopiq olamga qo'shiling va barcha 1,500+ videolardan cheklovlarsiz rohatlaning!</i>"
+        "🔥 <b>ЭЛИТНЫЙ VIP-АРХИВ: 1,500+ ВИДЕО БЕЗ ЦЕНЗУРЫ!</b> 🔥\n\n"
+        "Вы устали от однообразного контента и пустых обещаний? Добро пожаловать в эпицентр страсти и откровенности! "
+        "Мы собрали для вас самую горячую, элитную и закрытую коллекцию видео в Telegram.\n\n"
+        "✨ <b>Почему этот архив выбирают тысячи ценителей:</b>\n"
+        "• 🎬 <b>Более 1,500+ эксклюзивных видео</b> в безупречном HD качестве — обновления прилетают КАЖДЫЙ ДЕНЬ!\n"
+        "• 🔞 Никакой цензуры, рекламы и скучных пауз. Только чистые эмоции и эротическое наслаждение.\n"
+        "• 🔒 Полностью закрытая база, защищенная от слива — контент доступен только истинным участникам клуба.\n\n"
+        "💥 <i>Не отказывайте себе в удовольствии. Нажмите кнопку ниже и окунитесь в мир абсолютного кайфа прямо сейчас! 👇</i>"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 To'liq arxivga kirish (1,500+ video)", url=CHANNELS_SECTION_LINK)],
-        [InlineKeyboardButton(text="◀️ Orqaga", callback_data="back_main")]
+        [InlineKeyboardButton(text="🚀 Войти в премиум архив (1,500+ видео)", url=CHANNELS_SECTION_LINK)],
+        [InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]
     ])
     await c.message.edit_text(archive_text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
@@ -444,12 +475,14 @@ async def channels(c: CallbackQuery):
 async def free_channel(c: CallbackQuery):
     uid = c.from_user.id
     if not await check_subscription(uid):
-        await c.answer("⚠️ Нужна подписка!", show_alert=True)
+        await c.answer("⚠️ Нужна подписка на каналы!", show_alert=True)
         return
     await c.answer()
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={uid}"
-    share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote('🔥 1,500+ видео в закрытом VIP-архиве! Заходи!')}"
+    share_text = "🔥 1,500+ горячих видео без цензуры в закрытом VIP-архиве! Заходи и забирай бонус 🎁"
+    share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(share_text)}"
+    
     user = await get_user(uid)
     points = user['points'] if user else 0
     expire_str = user['expire_date'] if user else None
@@ -463,14 +496,23 @@ async def free_channel(c: CallbackQuery):
     bar = "▰" * min(int(points), REQUIRED_REFERRALS) + "▱" * (REQUIRED_REFERRALS - min(int(points), REQUIRED_REFERRALS))
     pts_str = f"{int(points)}" if points.is_integer() else f"{points}"
     
-    text = f"⚡ <b>VIP Доступ (1,500+ видео)</b>\nПрогресс: [{bar}] <b>{pts_str}/{REQUIRED_REFERRALS}</b>\n\n🔗 <code>{ref_link}</code>"
+    text = (
+        f"⚡ <b>Бесплатный доступ к 1,500+ видео</b>\n"
+        f"┏━━━━━━━━━━━━━━━━━━━━━\n"
+        f"┃ Приглашайте друзей и заполняйте шкалу\n"
+        f"┃ прогресса для получения VIP-статуса.\n"
+        f"┗━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 Шкала: [{bar}] <b>{pts_str}/{REQUIRED_REFERRALS}</b>\n\n"
+        f"🔗 <b>Ваша личная ссылка:</b>\n"
+        f"<code>{ref_link}</code>"
+    )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Поделиться", url=share_url)],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]
+        [InlineKeyboardButton(text="📤 Поделиться с друзьями (1 клик)", url=share_url)],
+        [InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]
     ])
 
     if is_vip and expire_str:
-        await c.message.edit_text(text + f"\n\n🟢 VIP активен до: {expire_str}", reply_markup=kb, parse_mode=ParseMode.HTML)
+        await c.message.edit_text(text + f"\n\n🟢 <b>VIP доступ активен до:</b> {expire_str}", reply_markup=kb, parse_mode=ParseMode.HTML)
         return
 
     if points >= REQUIRED_REFERRALS:
@@ -480,15 +522,15 @@ async def free_channel(c: CallbackQuery):
                 await conn.execute("UPDATE users SET expire_date = $1, warned_expire = 0 WHERE user_id = $2", exp_str, uid)
         link = await bot.create_chat_invite_link(chat_id=PRIVATE_CHANNEL_ID, creates_join_request=True, expire_date=datetime.now() + timedelta(minutes=15))
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔓 Подать заявку", url=link.invite_link)],
+            [InlineKeyboardButton(text="🔓 Подать заявку в VIP", url=link.invite_link)],
             [InlineKeyboardButton(text="📤 Поделиться", url=share_url)],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]
+            [InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]
         ])
-        text += f"\n\n🎉 Готово! Доступ ко всем 1,500+ видео открыт на {SUB_DAYS} дней."
+        text += f"\n\n🎉 <b>Цель достигнута!</b> Доступ ко всем 1,500+ видео открыт на {SUB_DAYS} дней."
     else:
         needed = REQUIRED_REFERRALS - points
         needed_str = f"{int(needed)}" if needed.is_integer() else f"{needed}"
-        text += f"\n\n💡 Осталось набрать баллов: <b>{needed_str}</b>"
+        text += f"\n\n💡 <b>Осталось пригласить:</b> {needed_str} друзей"
 
     await c.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
@@ -508,7 +550,7 @@ async def join_req(req: ChatJoinRequest):
             if db_pool:
                 async with db_pool.acquire() as conn:
                     await conn.execute("UPDATE users SET expire_date = $1, warned_expire = 0 WHERE user_id = $2", exp_str, uid)
-            await bot.send_message(uid, f"✅ Заявка одобрена! Доступ к 1,500+ видео активен до {exp_str}", parse_mode=ParseMode.HTML)
+            await bot.send_message(uid, f"✅ <b>Заявка одобрена!</b> Добро пожаловать к 1,500+ видео. VIP активен до {exp_str}", parse_mode=ParseMode.HTML)
         except Exception: pass
         return
 
@@ -520,19 +562,28 @@ async def join_req(req: ChatJoinRequest):
                 async with db_pool.acquire() as conn:
                     await conn.execute("UPDATE users SET trial_used = 1, expire_date = $1, warned_expire = 1 WHERE user_id = $2", exp_str, uid)
             asyncio.create_task(kick_after_trial(uid, TRIAL_SECONDS))
-            await bot.send_message(uid, "⏱ Тест-драйв запущен на 60 секунд! Оцените наши 1,500+ видео.", parse_mode=ParseMode.HTML)
+            await bot.send_message(uid, "⏱ <b>Тест-драйв запущен!</b> У вас есть 60 секунд насладиться 1,500+ видео!", parse_mode=ParseMode.HTML)
         except Exception: pass
         return
 
     try:
         await req.decline()
-        await bot.send_message(uid, "❌ Тест уже использован. Наберите 10 баллов для доступа к 1,500+ видео.", parse_mode=ParseMode.HTML)
+        await bot.send_message(uid, "❌ <b>Доступ ограничен.</b> Вы уже использовали тест-драйв. Наберите 10 баллов для полного доступа к 1,500+ видео.", parse_mode=ParseMode.HTML)
     except Exception: pass
 
 @dp.callback_query(F.data == "help")
 async def help_h(c: CallbackQuery):
     await c.answer()
-    await c.message.edit_text("📖 <b>Справка Nexus</b>\nИспользуйте меню для навигации.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")]]), parse_mode=ParseMode.HTML)
+    help_text = (
+        "📖 <b>Справочный центр Nexus</b>\n"
+        "┏━━━━━━━━━━━━━━━━━━━━━\n"
+        "┃ • 📂 <b>Премиум Архив</b> — база из 1,500+ видео.\n"
+        "┃ • ⏱ <b>Тест-драйв</b> — 1 минута бесплатного VIP.\n"
+        "┃ • 🎁 <b>Старт</b> — бонусные баллы при входе.\n"
+        "┃ • 🔥 <b>Турбо 2X</b> — х2 баллы в первый час.\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await c.message.edit_text(help_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]]), parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data == "back_main")
 async def back_main(c: CallbackQuery, state: FSMContext):
@@ -587,7 +638,7 @@ async def set_daily_save(m: types.Message, state: FSMContext):
         float_val = float(val)
         if float_val < 0: raise ValueError()
     except ValueError:
-        await m.answer("❌ Ошибка! Введите корректное число (например: <code>0.5</code>, <code>1</code> или <code>1.5</code>).", reply_markup=await get_admin_keyboard())
+        await m.answer("❌ Ошибка! Введите корректное число (например: <code>0.5</code> или <code>1</code>).", reply_markup=await get_admin_keyboard())
         return
     
     await set_setting("daily_reward", val)
@@ -704,18 +755,18 @@ async def auto_kick_expired_users():
                         exp = datetime.strptime(r['expire_date'], "%Y-%m-%d %H:%M:%S")
                         if 0 < (exp - now).total_seconds() <= 10800 and warned == 0:
                             try:
-                                await bot.send_message(u_id, "⚠️ Подписка на 1,500+ видео истекает через 3 часа!", parse_mode=ParseMode.HTML)
+                                await bot.send_message(u_id, "⚠️ Ваша VIP-подписка на 1,500+ видео истекает через 3 часа!", parse_mode=ParseMode.HTML)
                                 await conn.execute("UPDATE users SET warned_expire = 1 WHERE user_id = $1", u_id)
                             except Exception: pass
                         if now >= exp:
                             is_full = pts >= REQUIRED_REFERRALS
                             try:
-                                m = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id if 'user_id' in locals() else u_id)
+                                m = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
                                 if m.status in ["member", "restricted"]:
                                     await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
                                     await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
                                     if is_full:
-                                        await bot.send_message(u_id, "⏰ Срок доступа к архиву истек!", parse_mode=ParseMode.HTML)
+                                        await bot.send_message(u_id, "⏰ Срок доступа к архиву 1,500+ видео истек!", parse_mode=ParseMode.HTML)
                             except Exception: pass
                             if is_full:
                                 await conn.execute("UPDATE users SET expire_date = NULL, points = $1, warned_expire = 0 WHERE user_id = $2", float(WELCOME_BONUS), u_id)
