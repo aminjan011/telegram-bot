@@ -1,16 +1,3 @@
-Siz so'ragan **«⏱ Тест-драйв (1 минута)»** funksiyasi va bosh menyudagi barcha yangi imkoniyatlar haqidagi qisqacha ma'lumotlar to'liq qo'shildi.
-
-### Yangi funksiya qanday ishlaydi?
-
-1. **Asosiy menyuda «⏱ Тест-драйв (1 минута)» tugmasi:** Foydalanuvchi uni bosganda (agar oldin ishlatmagan bo'lsa), bot unga yopiq kanalga kirish uchun havola beradi. Agar u bu imkoniyatdan foydalanib bo'lgan bo'lsa, tugma menyudan avtomatik yo'qoladi (yoki bosganda ogohlantirish chiqadi).
-2. **Aniq 60 soniyalik taymer:** Taymer havola yaratilganda emas, balki foydalanuvchi **kanalga qadam qo'ygan soniyadan boshlab** (`handle_private_join_request` ichida `asyncio.create_task` orqali) ishga tushadi.
-3. **Avtomatik chiqarish va motivatsiya:** Foydalanuvchi kanalga kirib, ichidagi kontent haqiqatan ham borligini ko'radi va lentalarni aylantiradi. 60 soniya to'lishi bilan bot uni kanaldan chiqarib yuboradi va lichkasiga: *«Test-drayv vaqti tugadi! Ko'rganingizdek, kanalimizda hamma narsa haqiqiy. Endi 10 kunga to'liq kirish uchun do'stlaringizni taklif qiling!»* deb xabar hamda **1-Click Share** tugmasini yuboradi. (Agar server shu 1 daqiqa ichida qayta ishga tushib qolsa ham, orqa fondagi tekshiruvchi 10 soniyalik sikl uni baribir vaqtida chiqarib yuboradi).
-
----
-
-### To'liq yangilangan kod (`main.py`):
-
-```python
 import os
 import logging
 import html
@@ -42,8 +29,8 @@ PRIVATE_CHANNEL_ID = -1004324882879
 CHANNELS_SECTION_LINK = "https://t.me/+j2RWAdcz2FwwMGVi"
 REQUIRED_REFERRALS = 10
 SUB_DAYS = 10
-WELCOME_BONUS = 2  # Startda beriladigan boshlang'ich sovg'a ball
-TRIAL_SECONDS = 60  # 1 daqiqalik (60 soniya) test-drayv vaqti
+WELCOME_BONUS = 2
+TRIAL_SECONDS = 60
 ADMIN_USERNAME = "zyroxcv"
 ADMIN_ID = 1112793157
 
@@ -67,7 +54,6 @@ class AdminStates(StatesGroup):
     waiting_for_promo = State()
     waiting_for_preview = State()
 
-# --- ASYNC DATABASE CONNECTION POOL ---
 db_pool: asyncpg.Pool = None
 
 async def init_db_pool():
@@ -90,7 +76,6 @@ async def init_db_pool():
                         trial_used INT DEFAULT 0
                     )
                 ''')
-                # Eski bazada yangi ustunlar bo'lmasa xavfsiz qo'shish (Migratsiya)
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_bonus TEXT")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS warned_expire INT DEFAULT 0")
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS joined_at TEXT")
@@ -185,8 +170,7 @@ async def check_subscription(user_id: int) -> bool:
             return False
     return True
 
-def is_2x_active(joined_at_str: str) -> tuple[bool, int]:
-    """Foydalanuvchining 1 soatlik 2X bonusi faolligini va qolgan daqiqani tekshiradi"""
+def is_2x_active(joined_at_str: str):
     if not joined_at_str:
         return False, 0
     try:
@@ -198,13 +182,10 @@ def is_2x_active(joined_at_str: str) -> tuple[bool, int]:
         pass
     return False, 0
 
-# --- 1 DAQIQALIK TEST-DRAYVDAN SO'NG AVTOMATIK CHIQARISH ---
 async def kick_after_trial(user_id: int, delay: int = TRIAL_SECONDS):
-    """Foydalanuvchi 1 daqiqalik sinov bilan kirganda aniq 60 soniyadan keyin chiqarib yuboradi"""
     await asyncio.sleep(delay)
     try:
         user = await get_user(user_id)
-        # Agar shu 1 daqiqa ichida 10 ball yig'ib ulgurgan bo'lsa, chiqarmaymiz
         if user and user['points'] >= REQUIRED_REFERRALS:
             return
 
@@ -242,7 +223,6 @@ async def kick_after_trial(user_id: int, delay: int = TRIAL_SECONDS):
     except Exception as e:
         logging.error(f"Trial kick xatosi ({user_id}): {e}")
 
-# --- PREMIUM DESIGNED KEYBOARDS ---
 async def get_main_keyboard(user_id: int):
     user = await get_user(user_id)
     points = user['points'] if user else 0
@@ -254,7 +234,6 @@ async def get_main_keyboard(user_id: int):
         [InlineKeyboardButton(text="📂 Премиум Архив", callback_data="channels"), InlineKeyboardButton(text=vip_text, callback_data="free_channel")],
     ]
 
-    # Agar 1 daqiqalik test-drayv hali ishlatilmagan bo'lsa, tugmani ko'rsatamiz
     if trial_used == 0:
         keyboard.append([
             InlineKeyboardButton(text="⏱ Тест-драйв (1 мин)", callback_data="trial_access"),
@@ -304,7 +283,6 @@ async def get_admin_keyboard():
     )
 
 async def process_welcome_and_referral(user_id: int):
-    """Obuna tasdiqlanganda Welcome Bonus (+2) va Referrerga (1X yoki 2X) ball berish"""
     user = await get_user(user_id)
     if not user or not db_pool:
         return False
@@ -345,7 +323,6 @@ async def process_welcome_and_referral(user_id: int):
     return got_welcome
 
 def build_welcome_text(first_name: str, user_row, got_welcome: bool = False) -> str:
-    """Asosiy menyu matni — barcha yangi funksiyalar haqida qisqacha ma'lumot bilan"""
     boost_line = ""
     if user_row and user_row['joined_at']:
         active_2x, mins_left = is_2x_active(user_row['joined_at'])
@@ -368,8 +345,6 @@ def build_welcome_text(first_name: str, user_row, got_welcome: bool = False) -> 
         f"• 🎬 <b>Превью & Бонусы</b> — демонстрация контента, промокоды и ежедневные награды.\n\n"
         f"👇 <i>Выберите нужный инструмент в панели управления:</i>"
     )
-
-# --- USER HANDLERS ---
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
@@ -430,7 +405,6 @@ async def check_sub_callback(callback: CallbackQuery):
     else:
         await callback.answer("⚠️ Вы подписались еще не на все обязательные каналы!", show_alert=True)
 
-# --- 1 DAQIQALIK TEST-DRAYV HANDLERI ---
 @dp.callback_query(F.data == "trial_access")
 async def trial_access_handler(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -442,14 +416,12 @@ async def trial_access_handler(callback: CallbackQuery):
     if not user:
         return
 
-    # Agar allaqachon 1 marta ishlatib bo'lgan bo'lsa
     if user['trial_used'] == 1:
         await callback.answer("❌ Вы уже использовали свой разовый 1-минутный тест-драйв!", show_alert=True)
         return
 
     await callback.answer()
     try:
-        # 10 daqiqa amal qiladigan ariza havolasi yaratamiz
         invite_link = await bot.create_chat_invite_link(
             chat_id=PRIVATE_CHANNEL_ID,
             creates_join_request=True,
@@ -749,10 +721,8 @@ async def free_channel_handler(callback: CallbackQuery):
 
     await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
-# --- SMART JOIN REQUEST AUTO-APPROVAL (10 KUNLIK VIP YOKI 1 DAQIQALIK TEST-DRAYV) ---
 @dp.chat_join_request(F.chat.id == PRIVATE_CHANNEL_ID)
 async def handle_private_join_request(request: ChatJoinRequest):
-    """Yopiq kanalga ariza tushganda: 10 ball bo'lsa 10 kunga, aks holda trial_used=0 bo'lsa 1 daqiqaga kiritadi"""
     user_id = request.from_user.id
     user = await get_user(user_id)
 
@@ -763,7 +733,6 @@ async def handle_private_join_request(request: ChatJoinRequest):
             pass
         return
 
-    # 1-HOLAT: Foydalanuvchida 10+ ball bor (To'liq 10 kunlik VIP)
     if user['points'] >= REQUIRED_REFERRALS:
         try:
             await request.approve()
@@ -783,7 +752,6 @@ async def handle_private_join_request(request: ChatJoinRequest):
             logging.error(f"Join request full approve xatosi: {e}")
         return
 
-    # 2-HOLAT: 10 ball yo'q, lekin 1 daqiqalik Test-drayv ishlatilmagan (trial_used == 0)
     if user['trial_used'] == 0:
         try:
             await request.approve()
@@ -792,13 +760,11 @@ async def handle_private_join_request(request: ChatJoinRequest):
             
             if db_pool:
                 async with db_pool.acquire() as conn:
-                    # trial_used = 1 va warned_expire = 1 qilamiz (3 soatlik ogohlantirish xabari ketib qolmasligi uchun)
                     await conn.execute(
                         "UPDATE users SET trial_used = 1, expire_date = $1, warned_expire = 1 WHERE user_id = $2",
                         expire_str, user_id
                     )
 
-            # Aniq 60 soniyadan keyin chiqarib yuboruvchi vazifani ishga tushiramiz
             asyncio.create_task(kick_after_trial(user_id, TRIAL_SECONDS))
 
             await bot.send_message(
@@ -811,7 +777,6 @@ async def handle_private_join_request(request: ChatJoinRequest):
             logging.error(f"Join request trial approve xatosi: {e}")
         return
 
-    # 3-HOLAT: Ball ham yetmaydi, test-drayv ham ishlatib bo'lingan
     try:
         await request.decline()
         await bot.send_message(
@@ -1137,7 +1102,6 @@ async def auto_kick_expired_users():
                         try:
                             expire_dt = datetime.strptime(r['expire_date'], "%Y-%m-%d %H:%M:%S")
                             
-                            # 3 soat qolganda ogohlantirish (faqat to'liq obunachilar uchun, warned == 0 bo'lsa)
                             if 0 < (expire_dt - now).total_seconds() <= 10800 and warned == 0:
                                 try:
                                     await bot.send_message(
@@ -1150,7 +1114,6 @@ async def auto_kick_expired_users():
                                 except Exception:
                                     pass
 
-                            # Muddat tugaganda kanaldan chiqarish
                             if now >= expire_dt:
                                 is_full_sub = pts >= REQUIRED_REFERRALS
                                 try:
@@ -1172,7 +1135,6 @@ async def auto_kick_expired_users():
                                 except Exception:
                                     pass
 
-                                # Agar 10 kunlik obuna tugagan bo'lsa ballni WELCOME_BONUS ga tushiramiz, agar 1 minutlik trial bo'lsa o'z ballarini saqlab qolamiz
                                 if is_full_sub:
                                     await conn.execute("UPDATE users SET expire_date = NULL, points = $1, warned_expire = 0 WHERE user_id = $2", WELCOME_BONUS, u_id)
                                 else:
@@ -1209,5 +1171,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-```
