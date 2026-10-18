@@ -51,6 +51,7 @@ class AdminStates(StatesGroup):
     waiting_for_ch1 = State()
     waiting_for_ch2 = State()
     waiting_for_chat = State()
+    waiting_for_trial_channel = State()
     waiting_for_promo = State()
     waiting_for_preview = State()
     waiting_for_daily_reward = State()
@@ -100,6 +101,7 @@ async def init_db_pool():
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('chat_link', '') ON CONFLICT (key) DO NOTHING")
+                await conn.execute(f"INSERT INTO settings (key, value) VALUES ('trial_channel_id', '{PRIVATE_CHANNEL_ID}') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_file_id', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_type', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_caption', '') ON CONFLICT (key) DO NOTHING")
@@ -121,6 +123,15 @@ async def set_setting(key: str, value: str):
             "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             key, value
         )
+
+async def get_trial_channel_id() -> int:
+    val = await get_setting('trial_channel_id')
+    if val and val.strip():
+        try:
+            return int(val.strip())
+        except ValueError:
+            pass
+    return PRIVATE_CHANNEL_ID
 
 async def get_user(user_id: int):
     if not db_pool: return None
@@ -173,10 +184,11 @@ async def kick_after_trial(user_id: int, delay: int = TRIAL_SECONDS):
     try:
         user = await get_user(user_id)
         if user and user['points'] >= REQUIRED_REFERRALS: return
-        m = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
+        trial_ch = await get_trial_channel_id()
+        m = await bot.get_chat_member(chat_id=trial_ch, user_id=user_id)
         if m.status in ["member", "restricted"]:
-            await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
-            await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
+            await bot.ban_chat_member(chat_id=trial_ch, user_id=user_id)
+            await bot.unban_chat_member(chat_id=trial_ch, user_id=user_id)
         if db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute("UPDATE users SET expire_date = NULL WHERE user_id = $1", user_id)
@@ -231,6 +243,7 @@ async def get_admin_keyboard():
     ch1 = await get_setting('channel_1') or "Не задан"
     ch2 = await get_setting('channel_2') or "Не задан"
     chat = await get_setting('chat_link') or "Не задан"
+    trial_ch = await get_setting('trial_channel_id') or str(PRIVATE_CHANNEL_ID)
     prev = "✅ Есть" if await get_setting('preview_file_id') else "❌ Нет"
     daily_val = await get_setting('daily_reward') or "1"
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -240,6 +253,7 @@ async def get_admin_keyboard():
         [InlineKeyboardButton(text=f"🎬 Превью: {prev}", callback_data="admin_set_preview")],
         [InlineKeyboardButton(text=f"⚙️ Канал 1: {ch1}", callback_data="admin_set_ch1")],
         [InlineKeyboardButton(text=f"⚙️ Канал 2: {ch2}", callback_data="admin_set_ch2")],
+        [InlineKeyboardButton(text=f"⏱ Test Kanal: {trial_ch}", callback_data="admin_set_trial_ch")],
         [InlineKeyboardButton(text=f"💬 Чат: {chat}", callback_data="admin_set_chat")],
         [InlineKeyboardButton(text="❌ Закрыть", callback_data="admin_close")]
     ])
@@ -337,7 +351,8 @@ async def trial_access_handler(callback: CallbackQuery):
         return
     await callback.answer()
     try:
-        link = await bot.create_chat_invite_link(chat_id=PRIVATE_CHANNEL_ID, creates_join_request=True, expire_date=datetime.now() + timedelta(minutes=10))
+        trial_ch = await get_trial_channel_id()
+        link = await bot.create_chat_invite_link(chat_id=trial_ch, creates_join_request=True, expire_date=datetime.now() + timedelta(minutes=10))
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🚀 Войти на 1 минуту (VIP)", url=link.invite_link)],
             [InlineKeyboardButton(text="◀️ На главную", callback_data="back_main")]
@@ -364,7 +379,8 @@ async def profile_handler(callback: CallbackQuery):
     trial = "✅ Доступен" if (user and user['trial_used'] == 0) else "❌ Использован"
     is_vip = False
     try:
-        m = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=user_id)
+        trial_ch = await get_trial_channel_id()
+        m = await bot.get_chat_member(chat_id=trial_ch, user_id=user_id)
         if m.status in ["creator", "administrator", "member"]: is_vip = True
     except Exception: pass
 
@@ -453,7 +469,6 @@ async def channels(c: CallbackQuery):
         return
     await c.answer()
     
-    # Сверх-эмоциональный, страстный и продающий текст для архива на русском языке
     archive_text = (
         "🔥 <b>ЭЛИТНЫЙ VIP-АРХИВ: 1,500+ ВИДЕО БЕЗ ЦЕНЗУРЫ!</b> 🔥\n\n"
         "Вы устали от однообразного контента и пустых обещаний? Добро пожаловать в эпицентр страсти и откровенности! "
@@ -489,7 +504,8 @@ async def free_channel(c: CallbackQuery):
 
     is_vip = False
     try:
-        m = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=uid)
+        trial_ch = await get_trial_channel_id()
+        m = await bot.get_chat_member(chat_id=trial_ch, user_id=uid)
         if m.status in ["creator", "administrator", "member"]: is_vip = True
     except Exception: pass
 
@@ -520,7 +536,8 @@ async def free_channel(c: CallbackQuery):
         if db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute("UPDATE users SET expire_date = $1, warned_expire = 0 WHERE user_id = $2", exp_str, uid)
-        link = await bot.create_chat_invite_link(chat_id=PRIVATE_CHANNEL_ID, creates_join_request=True, expire_date=datetime.now() + timedelta(minutes=15))
+        trial_ch = await get_trial_channel_id()
+        link = await bot.create_chat_invite_link(chat_id=trial_ch, creates_join_request=True, expire_date=datetime.now() + timedelta(minutes=15))
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔓 Подать заявку в VIP", url=link.invite_link)],
             [InlineKeyboardButton(text="📤 Поделиться", url=share_url)],
@@ -534,8 +551,12 @@ async def free_channel(c: CallbackQuery):
 
     await c.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
-@dp.chat_join_request(F.chat.id == PRIVATE_CHANNEL_ID)
+@dp.chat_join_request()
 async def join_req(req: ChatJoinRequest):
+    trial_ch = await get_trial_channel_id()
+    if req.chat.id != trial_ch:
+        return
+        
     uid = req.from_user.id
     user = await get_user(uid)
     if not user:
@@ -709,6 +730,32 @@ async def save_ch1(m: types.Message, state: FSMContext):
     await state.clear()
     await m.answer(f"✅ Канал 1: {ch}", reply_markup=await get_admin_keyboard())
 
+@dp.callback_query(F.data == "admin_set_trial_ch")
+async def set_trial_ch(c: CallbackQuery, state: FSMContext):
+    if c.from_user.id != ADMIN_ID: return
+    await c.answer()
+    await state.set_state(AdminStates.waiting_for_trial_channel)
+    await c.message.edit_text("Отправьте ID тест-канала (masalan: <code>-100xxxxxxxxxx</code>) yoki o'chirish uchun <code>0</code> yuboring:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_cancel_settings")]]))
+
+@dp.message(AdminStates.waiting_for_trial_channel)
+async def save_trial_ch(m: types.Message, state: FSMContext):
+    if m.from_user.id != ADMIN_ID: return
+    val = m.text.strip()
+    try:
+        chat_id = int(val)
+        if chat_id == 0:
+            await set_setting("trial_channel_id", str(PRIVATE_CHANNEL_ID))
+            await state.clear()
+            await m.answer(f"✅ Test kanal ID standart qiymatga ({PRIVATE_CHANNEL_ID}) qaytarildi.", reply_markup=await get_admin_keyboard())
+            return
+    except ValueError:
+        await m.answer("❌ Xatolik! ID raqam bo'lishi kerak (masalan: <code>-100123456789</code>). Qaytadan yuboring:", reply_markup=get_admin_keyboard())
+        return
+
+    await set_setting("trial_channel_id", str(chat_id))
+    await state.clear()
+    await m.answer(f"✅ Test kanal ID muvaffaqiyatli saqlandi: <code>{chat_id}</code>", reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
+
 @dp.callback_query(F.data == "admin_broadcast")
 async def broadcast(c: CallbackQuery, state: FSMContext):
     if c.from_user.id != ADMIN_ID: return
@@ -761,10 +808,11 @@ async def auto_kick_expired_users():
                         if now >= exp:
                             is_full = pts >= REQUIRED_REFERRALS
                             try:
-                                m = await bot.get_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                trial_ch = await get_trial_channel_id()
+                                m = await bot.get_chat_member(chat_id=trial_ch, user_id=u_id)
                                 if m.status in ["member", "restricted"]:
-                                    await bot.ban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
-                                    await bot.unban_chat_member(chat_id=PRIVATE_CHANNEL_ID, user_id=u_id)
+                                    await bot.ban_chat_member(chat_id=trial_ch, user_id=u_id)
+                                    await bot.unban_chat_member(chat_id=trial_ch, user_id=u_id)
                                     if is_full:
                                         await bot.send_message(u_id, "⏰ Срок доступа к архиву 1,500+ видео истек!", parse_mode=ParseMode.HTML)
                             except Exception: pass
