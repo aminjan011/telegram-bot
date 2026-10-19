@@ -3,8 +3,8 @@ import logging
 import html
 import asyncio
 import urllib.parse
-from datetime import datetime, timedelta
 import asyncpg
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, CommandObject, Command
 from aiogram.types import (
@@ -23,16 +23,20 @@ from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
-# ==================== СОЗЛАМА (SETTINGS) ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8932013152:AAEPVbmHe0zuH_zGyhFSxi4eomRCIez6QSA")
-PRIVATE_CHANNEL_ID = -1004324882879
-CHANNELS_SECTION_LINK = "https://t.me/+j2RWAdcz2FwwMGVi"
-REQUIRED_REFERRALS = 10
-SUB_DAYS = 10
-WELCOME_BONUS = 2        
-TRIAL_SECONDS = 60       
-ADMIN_USERNAME = "zyroxcv"
-ADMIN_ID = 1112793157
+# ==================== SOZLAMALAR (XAVFSIZ) ====================
+# Token hech qachon ochiq holda yozilmaydi. U faqat Render'dagi Environment Variables'dan o'qiladi.
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("XATOLIK: BOT_TOKEN muhit o'zgaruvchilarida (Environment Variables) topilmadi!")
+
+PRIVATE_CHANNEL_ID = int(os.getenv("PRIVATE_CHANNEL_ID", "-1004324882879"))
+CHANNELS_SECTION_LINK = os.getenv("CHANNELS_SECTION_LINK", "https://t.me/+j2RWAdcz2FwwMGVi")
+REQUIRED_REFERRALS = int(os.getenv("REQUIRED_REFERRALS", "10"))
+SUB_DAYS = int(os.getenv("SUB_DAYS", "10"))
+WELCOME_BONUS = float(os.getenv("WELCOME_BONUS", "2"))        
+TRIAL_SECONDS = int(os.getenv("TRIAL_SECONDS", "60"))        
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "zyroxcv")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "1112793157"))
 
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
@@ -56,7 +60,7 @@ class AdminStates(StatesGroup):
     waiting_for_preview = State()
     waiting_for_daily_reward = State()
 
-# --- БАЗА ДАННЫХ ---
+# --- BAZA DANNYX ---
 db_pool: asyncpg.Pool = None
 
 async def init_db_pool():
@@ -106,9 +110,9 @@ async def init_db_pool():
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_type', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('preview_caption', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('daily_reward', '1') ON CONFLICT (key) DO NOTHING")
-            logging.info("База данных успешно инициализирована!")
+                logging.info("Ma'lumotlar bazasi muvaffaqiyatli ishga tushirildi!")
         except Exception as e:
-            logging.error(f"Ошибка БД: {e}")
+            logging.error(f"Ma'lumotlar bazasi xatoligi: {e}")
 
 async def get_setting(key: str) -> str:
     if not db_pool: return ""
@@ -204,7 +208,6 @@ async def kick_after_trial(user_id: int, delay: int = TRIAL_SECONDS):
     except Exception:
         pass
 
-# --- ПРЕМИУМ КЛАВИАТУРЫ ---
 async def get_main_keyboard(user_id: int):
     user = await get_user(user_id)
     points = user['points'] if user else 0
@@ -300,7 +303,6 @@ def build_welcome_text(first_name: str, user_row, got_welcome: bool = False) -> 
         f"👇 <i>Выберите нужный раздел в меню ниже:</i>"
     )
 
-# --- ХЕНДЛЕРЫ ПОЛЬЗОВАТЕЛЯ ---
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
     user_id = message.from_user.id
@@ -614,7 +616,6 @@ async def back_main(c: CallbackQuery, state: FSMContext):
     user = await get_user(uid)
     await c.message.edit_text(build_welcome_text(html.escape(c.from_user.first_name), user, False), reply_markup=await get_main_keyboard(uid), parse_mode=ParseMode.HTML)
 
-# --- АДМИН ПАНЕЛЬ ---
 @dp.message(Command("admin"))
 async def admin_start(m: types.Message):
     if m.from_user.id != ADMIN_ID: return
@@ -749,7 +750,7 @@ async def save_trial_ch(m: types.Message, state: FSMContext):
             await m.answer(f"✅ Test kanal ID standart qiymatga ({PRIVATE_CHANNEL_ID}) qaytarildi.", reply_markup=await get_admin_keyboard())
             return
     except ValueError:
-        await m.answer("❌ Xatolik! ID raqam bo'lishi kerak (masalan: <code>-100123456789</code>). Qaytadan yuboring:", reply_markup=get_admin_keyboard())
+        await m.answer("❌ Xatolik! ID raqam bo'lishi kerak (masalan: <code>-100123456789</code>). Qaytadan yuboring:", reply_markup=await get_admin_keyboard())
         return
 
     await set_setting("trial_channel_id", str(chat_id))
