@@ -67,6 +67,8 @@ async def init_db_pool():
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_1', '@kinozhuldyzkz') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('channel_2', '') ON CONFLICT (key) DO NOTHING")
                 await conn.execute("INSERT INTO settings (key, value) VALUES ('chat_link', '') ON CONFLICT (key) DO NOTHING")
+                await conn.execute("INSERT INTO settings (key, value) VALUES ('last_success', '0') ON CONFLICT (key) DO NOTHING")
+                await conn.execute("INSERT INTO settings (key, value) VALUES ('last_failed', '0') ON CONFLICT (key) DO NOTHING")
             logging.info("Ma'lumotlar bazasi asyncpg orqali muvaffaqiyatli ishga tushdi!")
         except Exception as e:
             logging.error(f"Baza ulanishida xatolik: {e}")
@@ -413,38 +415,21 @@ async def admin_stats_handler(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
         
-    await callback.answer("⏳ Statistika hisoblanmoqda...", show_alert=False)
+    await callback.answer("⏳ Statistika yuklanmoqda...", show_alert=False)
     
     total_users, total_points = await get_stats()
-    users = await get_all_users()
-
-    # Botni blocklamaganlarni tezkor aniqlash uchun tekshiruv (parallel, lekin xavfsiz va limitga mos)
-    active_users = 0
-    blocked_users = 0
-
-    if users:
-        semaphore = asyncio.Semaphore(50)
-
-        async def check_user(uid):
-            async with semaphore:
-                try:
-                    # Foydalanuvchiga ovozsiz chat action yuborib ko'ramiz (agar blocklagan bo'lsa xato beradi)
-                    await bot.send_chat_action(chat_id=uid, action="typing")
-                    return True
-                except Exception:
-                    return False
-
-        # Barcha userlarni bir vaqtning o'zida tezda tekshirib chiqamiz
-        results = await asyncio.gather(*[check_user(uid) for uid in users])
-        active_users = sum(1 for r in results if r)
-        blocked_users = total_users - active_users
+    
+    # Oxirgi xabarnoma (broadcast) paytida aniqlangan faol va bloklaganlar sonini bazadan olamiz
+    active_users = int(await get_setting("last_success") or 0)
+    blocked_users = int(await get_setting("last_failed") or 0)
 
     text = (
         f"📊 <b>Statistika boti:</b>\n\n"
         f"👤 Jami foydalanuvchilar: <b>{total_users}</b>\n"
         f"🟢 Botni blocklamaganlar (Aktiv): <b>{active_users}</b>\n"
         f"🔴 Botni blocklaganlar: <b>{blocked_users}</b>\n"
-        f"⭐ Jami yig'ilgan ballar: <b>{total_points}</b>"
+        f"⭐ Jami yig'ilgan ballar: <b>{total_points}</b>\n\n"
+        f"<i>💡 Izoh: Aktiv va bloklaganlar soni oxirgi «Рассылка» (xabarnoma) natijalariga asoslanib yangilanadi.</i>"
     )
     try:
         await callback.message.edit_text(text, reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
@@ -571,6 +556,10 @@ async def process_broadcast(message: types.Message, state: FSMContext):
             await asyncio.sleep(0.05)
         except (TelegramForbiddenError, TelegramAPIError, Exception):
             failed += 1
+            
+    # Xabarnoma natijalarini bazaga saqlab qo'yamiz (statistikada ishlatish uchun)
+    await set_setting("last_success", str(success))
+    await set_setting("last_failed", str(failed))
             
     await message.answer(
         f"✅ <b>Рассылка завершена!</b>\n\n"
