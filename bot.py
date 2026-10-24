@@ -336,7 +336,6 @@ async def free_channel_handler(callback: CallbackQuery):
         expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
         expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
         
-        # Muddati bazaga saqlanadi
         if db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute(
@@ -414,15 +413,38 @@ async def admin_stats_handler(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
         
-    await callback.answer("⏳ Statistika yuklanmoqda...", show_alert=False)
+    await callback.answer("⏳ Statistika hisoblanmoqda...", show_alert=False)
     
     total_users, total_points = await get_stats()
+    users = await get_all_users()
+
+    # Botni blocklamaganlarni tezkor aniqlash uchun tekshiruv (parallel, lekin xavfsiz va limitga mos)
+    active_users = 0
+    blocked_users = 0
+
+    if users:
+        semaphore = asyncio.Semaphore(50)
+
+        async def check_user(uid):
+            async with semaphore:
+                try:
+                    # Foydalanuvchiga ovozsiz chat action yuborib ko'ramiz (agar blocklagan bo'lsa xato beradi)
+                    await bot.send_chat_action(chat_id=uid, action="typing")
+                    return True
+                except Exception:
+                    return False
+
+        # Barcha userlarni bir vaqtning o'zida tezda tekshirib chiqamiz
+        results = await asyncio.gather(*[check_user(uid) for uid in users])
+        active_users = sum(1 for r in results if r)
+        blocked_users = total_users - active_users
 
     text = (
         f"📊 <b>Statistika boti:</b>\n\n"
         f"👤 Jami foydalanuvchilar: <b>{total_users}</b>\n"
-        f"⭐ Jami yig'ilgan ballar: <b>{total_points}</b>\n\n"
-        f"<i>✅ Statistika ma'lumotlar bazasidan tezkor tarzda olib ko'rsatildi.</i>"
+        f"🟢 Botni blocklamaganlar (Aktiv): <b>{active_users}</b>\n"
+        f"🔴 Botni blocklaganlar: <b>{blocked_users}</b>\n"
+        f"⭐ Jami yig'ilgan ballar: <b>{total_points}</b>"
     )
     try:
         await callback.message.edit_text(text, reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
