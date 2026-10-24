@@ -98,7 +98,6 @@ async def add_user(user_id: int, referrer_id: int = None):
     if not db_pool:
         return
     async with db_pool.acquire() as conn:
-        # Yangi foydalanuvchi qo'shganda, agar o'zi o'zini taklif qilmagan bo'lsa va bu foydalanuvchi oldin bazada bo'lmasa yozamiz
         existing = await conn.fetchrow("SELECT user_id FROM users WHERE user_id = $1", user_id)
         if not existing:
             await conn.execute(
@@ -204,7 +203,6 @@ async def start_handler(message: types.Message, command: CommandObject):
     if not user:
         await add_user(user_id, referrer_id)
     elif user['referrer_id'] is None and referrer_id and user['points'] == 0:
-        # Agar foydalanuvchi oldin ro'yxatdan o'tgan bo'lib, lekin referersiz kirgan bo'lsa va hali ball yig'magan bo'lsa referrer yozib qo'yamiz
         if db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute("UPDATE users SET referrer_id = $1 WHERE user_id = $2 AND referrer_id IS NULL", referrer_id, user_id)
@@ -232,7 +230,6 @@ async def check_sub_callback(callback: CallbackQuery):
     
     if is_sub:
         user = await get_user(user_id)
-        # Agar foydalanuvchida referrer bo'lsa va u hali ball berilmagan bo'lsa (referrer_id saqlanib turgan bo'lsa)
         if user and user['referrer_id']:
             ref_id = user['referrer_id']
             if ref_id != user_id:
@@ -246,7 +243,6 @@ async def check_sub_callback(callback: CallbackQuery):
                 except (TelegramForbiddenError, Exception):
                     pass
             
-            # Takroriy hisoblanmasligi uchun referrer_id ni tozalaymiz
             if db_pool:
                 async with db_pool.acquire() as conn:
                     await conn.execute("UPDATE users SET referrer_id = NULL WHERE user_id = $1", user_id)
@@ -340,6 +336,15 @@ async def free_channel_handler(callback: CallbackQuery):
         expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
         expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
         
+        # --- MUAMMONI HAL QILUVCHI QISM: Muddati bazaga saqlanadi ---
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET expire_date = $1 WHERE user_id = $2",
+                    expire_date_str, user_id
+                )
+        # -----------------------------------------------------------
+
         try:
             expire_time = datetime.now() + timedelta(minutes=10)
             invite_link = await bot.create_chat_invite_link(
@@ -610,7 +615,6 @@ async def auto_kick_expired_users():
                                 except Exception as e:
                                     logging.error(f"Kanal a'zosini kick qilishda xato ({u_id}): {e}")
 
-                                # Vaqti tugaganda ballni 0 qilamiz va muddatni tozalaymiz
                                 await conn.execute("UPDATE users SET expire_date = NULL, points = 0 WHERE user_id = $1", u_id)
                         except Exception as ex:
                             logging.error(f"Sana parse qilishda xato: {ex}")
