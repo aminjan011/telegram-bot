@@ -336,14 +336,13 @@ async def free_channel_handler(callback: CallbackQuery):
         expire_dt = datetime.now() + timedelta(days=SUB_DAYS)
         expire_date_str = expire_dt.strftime("%Y-%m-%d %H:%M:%S")
         
-        # --- MUAMMONI HAL QILUVCHI QISM: Muddati bazaga saqlanadi ---
+        # Muddati bazaga saqlanadi
         if db_pool:
             async with db_pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE users SET expire_date = $1 WHERE user_id = $2",
                     expire_date_str, user_id
                 )
-        # -----------------------------------------------------------
 
         try:
             expire_time = datetime.now() + timedelta(minutes=10)
@@ -415,32 +414,15 @@ async def admin_stats_handler(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         return
         
-    await callback.answer("⏳ Подсчет активных пользователей...", show_alert=False)
+    await callback.answer("⏳ Statistika yuklanmoqda...", show_alert=False)
     
     total_users, total_points = await get_stats()
-    users = await get_all_users()
-
-    semaphore = asyncio.Semaphore(30)
-
-    async def check_user(uid):
-        async with semaphore:
-            try:
-                await bot.send_chat_action(chat_id=uid, action="typing")
-                return True
-            except Exception:
-                return False
-
-    results = await asyncio.gather(*[check_user(uid) for uid in users])
-    
-    active_users = sum(1 for r in results if r)
-    blocked_users = total_users - active_users
 
     text = (
-        f"📊 <b>Статистика бота:</b>\n\n"
-        f"👤 Всего пользователей: <b>{total_users}</b>\n"
-        f"🟢 Активных пользователей: <b>{active_users}</b>\n"
-        f"🔴 Заблокировали бота: <b>{blocked_users}</b>\n"
-        f"⭐ Всего набрано баллов: <b>{total_points}</b>"
+        f"📊 <b>Statistika boti:</b>\n\n"
+        f"👤 Jami foydalanuvchilar: <b>{total_users}</b>\n"
+        f"⭐ Jami yig'ilgan ballar: <b>{total_points}</b>\n\n"
+        f"<i>✅ Statistika ma'lumotlar bazasidan tezkor tarzda olib ko'rsatildi.</i>"
     )
     try:
         await callback.message.edit_text(text, reply_markup=await get_admin_keyboard(), parse_mode=ParseMode.HTML)
